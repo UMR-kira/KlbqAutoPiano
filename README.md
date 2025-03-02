@@ -14,11 +14,11 @@
 {
     "bpm": 60,    
     "notes": [    
-        {"beat": 0.5, "block": 1},        
-        {"beat": 0.5, "block": 13},        
-        {"beat": 1.0, "block": 5},        
-        {"beat": 0.5, "block": 4},        
-        {"beat": 2.0, "block": 8},        
-        {"beat": 0.5, "block": 16},
+         {"beat": 0.5, "block": 1},        
+         {"beat": 0.5, "block": 13},        
+         {"beat": 1.0, "block": 5},        
+         {"beat": 0.5, "block": 4},        
+         {"beat": 2.0, "block": 8},        
+         {"beat": 0.5, "block": 16},
     ]    
 }
