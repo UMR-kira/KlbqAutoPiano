@@ -10,9 +10,13 @@
 ![QQ截图20250302232525](https://github.com/user-attachments/assets/9fb6b779-1916-4910-86f7-9bfe365cb925)
 
 乐谱格式test.json：
+
 {
+
     "bpm": 60,
+    
     "notes": [
+    
         {"beat": 0.5, "block": 1},
         
         {"beat": 0.5, "block": 13},
@@ -25,4 +29,5 @@
         
         {"beat": 0.5, "block": 16},
     ]
+    
 }
