@@ -9,17 +9,15 @@
  
 ![QQ截图20250302232525](https://github.com/user-attachments/assets/9fb6b779-1916-4910-86f7-9bfe365cb925)
 
-[乐谱格式test.json](https://github.com/user-attachments/files/19043674/test.json){
+乐谱格式test.json：
+{
     "bpm": 60,
     "notes": [
         {"beat": 0.5, "block": 1},
-        {"beat": 0.5, "block": 3},
+        {"beat": 0.5, "block": 13},
         {"beat": 1.0, "block": 5},
-        {"beat": 0.5, "block": 7},
-        {"beat": 0.5, "block": 9},
-        {"beat": 0.5, "block": 11},
-        {"beat": 2.0, "block": 13},
-        {"beat": 1.0, "block": 15},
+        {"beat": 0.5, "block": 4},
+        {"beat": 2.0, "block": 8},
         {"beat": 0.5, "block": 16},
     ]
 }
