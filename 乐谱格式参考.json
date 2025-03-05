@@ -3,8 +3,8 @@
     "notes": [
         {"beat": 0.5, "block": 1},
         {"beat": 1.0, "block": 3},
-        {"beat": 1.5, "block": 8},
+        {"beat": 1.0, "block": 8},
         {"beat": 2.0, "block": 13},
-        {"beat": 2.5, "block": 15},
+        {"beat": 2.0, "block": 15}
     ]
 }
