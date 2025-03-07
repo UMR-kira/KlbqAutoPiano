@@ -6,9 +6,7 @@
  
  可能会被反作弊系统识别，不要用大号使用！！！
  
- 后续需要改进鼠标移动方式。目前还有一些比较摸不清头脑的bug，如有问题请提交讨论。
- 
-![QQ截图20250302232525](https://github.com/user-attachments/assets/9fb6b779-1916-4910-86f7-9bfe365cb925)
+ 后续需要改进鼠标移动方式。如有问题请提交讨论。
 
-
+![QQ截图20250307202558](https://github.com/user-attachments/assets/e54d7ff4-fb02-441a-9f63-8b749a3cfc2b)
 
