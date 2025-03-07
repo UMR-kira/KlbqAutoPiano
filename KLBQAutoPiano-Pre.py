@@ -12,9 +12,8 @@ import win32gui
 import win32con
 from pynput import keyboard, mouse
 """
-新增编辑乐谱功能
 """
-the_title = "卡拉彼丘琴房助手 v1.3.8 (25.3.6)"
+the_title = "卡拉彼丘琴房助手 v1.3.9 (25.3.7)"
 
 class GlobalHotkey:
     """热键监控"""
@@ -73,7 +72,7 @@ class SheetEditor:
         self.edit_window.protocol("WM_DELETE_WINDOW", self.on_editor_close)
 
         self.edit_window.title("乐谱编辑器")
-        self.edit_window.geometry("800x800")
+        self.edit_window.geometry("800x750")
 
         # 置顶控制栏
         top_control = ttk.Frame(self.edit_window)
@@ -193,7 +192,7 @@ class SheetEditor:
 
     def insert_note(self):
         """在选中位置前插入新音符"""
-        print(self.selected_index)
+        # print(self.selected_index)
         try:
             beat = float(self.beat_entry.get())
             block = int(self.note_entry.get())
@@ -278,7 +277,7 @@ class MusicAutoPlayer:
         """1、创建主窗口"""
         window = tk.Tk()
         window.title(the_title)
-        window.geometry("650x750")
+        window.geometry("700x750")
         window.columnconfigure(0, weight=1)
         return window
 
@@ -394,10 +393,10 @@ class MusicAutoPlayer:
 
     def check_window_active(self):
         """5-1、定时检测窗口激活状态"""
-        if self.state['playing'] and not self.is_window_active():
-            self.toggle_pause()
-            self.update_status("窗口未激活，自动暂停", 'orange')
-        self.window.after(1000, self.check_window_active)
+        # if self.state['playing'] and not self.is_window_active():
+        #     self.toggle_pause()
+        #     self.update_status("窗口未激活，自动暂停", 'orange')
+        # self.window.after(1000, self.check_window_active)
         pass
 
     def is_window_active(self):
@@ -405,7 +404,7 @@ class MusicAutoPlayer:
         try:
             active_hwnd = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(active_hwnd)
-            print(title)
+            # print(title)
             return active_hwnd == self.state['hwnd']
         except:
             return False
@@ -553,8 +552,17 @@ class MusicAutoPlayer:
     def play_notes(self):
         """6-1、演奏核心逻辑"""
         start_time = time.time()
+        # 键位映射：实际键位编号 → 原索引
+        index_map = [
+            12, 13, 14, 15,  # 坐标存储索引0-3 → 原索引12-15（对应13-16）
+            8, 9, 10, 11,  # 坐标存储4-7 → 原索引8-11（对应9-12）
+            4, 5, 6, 7,  # 坐标存储8-11 → 原索引4-7（对应5-8）
+            0, 1, 2, 3  # 坐标存储12-15 → 原索引0-3（对应1-4）
+        ]
+
         try:
             bpm = int(self.state['bpm'])
+            print(bpm)
             delay = 60 / bpm
 
             for idx, note in enumerate(self.sheet_data):
@@ -564,28 +572,36 @@ class MusicAutoPlayer:
                     if not self.state['playing']: return
                     if not self.state['paused'] and self.is_window_active():
                         break
-                    time.sleep(0.001)
+                    # time.sleep(0.001)
 
                 # 节拍同步  记录空节拍时间
                 target_time = abs(note['beat']) * delay
                 while time.time() - start_time < target_time:
                     if not self.state['playing'] or self.state['paused']: break
-                    time.sleep(0.001)
+                    # time.sleep(0.001)
 
                 # 界面更新
                 self.window.after(0, self.highlight_note, idx)
                 # 非空节拍才演奏
                 if note['beat'] > 0:
                     self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
-                    block = note['block'] - 1
-                    # 坐标移动模拟点击
+                    # 取得索引
+                    block = note['block']-1
                     mouse_shift = self.state.get('mouse')
-                    x, y = self.state['blocks'][block]
+                    # 修改索引映射逻辑
+                    original_index = index_map[block]
+                    x, y = self.state['blocks'][original_index]
+                    # 坐标移动模拟点击
                     x += random.gauss(0, mouse_shift)
                     y += random.gauss(0, mouse_shift)
-                    pyautogui.moveTo(x, y, duration=random.uniform(0.1, 0.3))
+                    pyautogui.moveTo(x, y, duration=random.uniform(target_time*0.85, target_time*0.95))
+                    stime = time.time() - start_time
                     pyautogui.click()
-
+                    stime2 = time.time() - start_time
+                    print(stime2-stime)
+                else:
+                    # 空节拍延时
+                    time.sleep(random.uniform(target_time*0.95, target_time*1.05))
         except Exception as e:
             self.update_status(f"演奏出错：{str(e)}", 'red')
         finally:
@@ -634,6 +650,7 @@ class MusicAutoPlayer:
         # 判断编辑器窗口是否存在后再刷新
         if self.sheet_editor.edit_window:
             try:
+                # if self.sheet_editor.edit_window and hasattr(self.sheet_editor, 'edit_window'):
                 if self.sheet_editor.edit_window.winfo_exists():
                     self.sheet_editor.refresh_list()
             except Exception as e:
