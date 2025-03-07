@@ -74,10 +74,7 @@ class SheetEditor:
 
     def load_sound_files(self):
         """加载声音文件"""
-        # 获取脚本文件所在的目录
-        exe_dir = os.path.dirname(os.path.abspath(__file__))
-        sound_dir = os.path.join(exe_dir, "sounds")  # 声音文件存放目录
-
+        sound_dir = "sounds"
         if not os.path.exists(sound_dir):
             messagebox.showinfo("提示", "未发现音频目录")
             return
