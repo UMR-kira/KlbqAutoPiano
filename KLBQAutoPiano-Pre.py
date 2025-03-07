@@ -12,9 +12,9 @@ from pynput import keyboard, mouse
 import pygame
 from pygame import mixer
 """
-新增预览播放功能，暂缺游戏音频文件
+修复预览播放功能，暂缺游戏音频文件
 """
-the_title = "卡拉彼丘琴房助手 v1.4.2 (25.3.7)"
+the_title = "卡拉彼丘琴房助手 v1.4.3 (25.3.7)"
 
 
 class GlobalHotkey:
@@ -74,12 +74,19 @@ class SheetEditor:
 
     def load_sound_files(self):
         """加载声音文件"""
-        sound_dir = "sounds"  # 声音文件存放目录
+        # 获取脚本文件所在的目录
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+        sound_dir = os.path.join(exe_dir, "sounds")  # 声音文件存放目录
+
         if not os.path.exists(sound_dir):
             messagebox.showinfo("提示", "未发现音频目录")
             return
         # 支持多格式音频文件
-        for file in os.listdir(sound_dir):
+        sound_files = os.listdir(sound_dir)
+        if len(sound_files) == 0:
+            messagebox.showinfo("错误", "文件夹为空")
+            self.app.update_status("载入音频失败")
+        for file in sound_files:
             if file.lower().endswith(('.wav', '.mp3', '.ogg')):
                 try:
                     # 从文件名提取音阶编号（例如："1.wav" -> 1）
@@ -90,8 +97,15 @@ class SheetEditor:
                     messagebox.showinfo("错误", "读取音频失败")
                     self.app.update_status("载入音频失败")
                     return
-        self.load_files_status = True
-        self.app.update_status("载入音频成功")
+        # len方法要带()调用
+        if self.sound_blocks.__len__() == 16:
+            self.load_files_status = True
+            self.app.update_status("载入音频成功")
+        else:
+            messagebox.showinfo("错误", "音频文件数量错误")
+            self.app.update_status("载入音频失败")
+            return
+
 
     def create_editor(self):
         """创建窗口"""
