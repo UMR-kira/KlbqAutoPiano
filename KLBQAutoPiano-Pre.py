@@ -88,9 +88,11 @@ class SheetEditor:
                     block_num = int(os.path.splitext(file)[0].strip('.'))
                     path = os.path.join(sound_dir, file)
                     self.sound_blocks[block_num] = mixer.Sound(path)
-                except (ValueError, pygame.error) as e:
-                    print(f"声音加载失败：{file} - {str(e)}")
-        self.load_files = True
+                except:
+                    self.app.update_status("载入音频失败")
+                    return
+            self.load_files = True
+            self.app.update_status("载入音频成功")
 
     def create_editor(self):
         """创建窗口"""
@@ -259,7 +261,6 @@ class SheetEditor:
         """新增预览播放方法"""
         if not self.load_files:
             self.load_sound_files()
-            self.app.update_status("载入预览按键音频成功")# 初始化时加载声音文件
         if self.preview_playing:
             return
         try:
