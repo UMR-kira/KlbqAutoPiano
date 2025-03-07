@@ -555,9 +555,9 @@ class MusicAutoPlayer:
 
     def calculate_blocks(self):
         """3-2、计算方块坐标"""
-        if None in self.state['coordinate']:
-            return
-        left, top, right, bottom = self.state['coordinate'][0], self.state['coordinate'][1]
+        if None in self.state['coordinate']: return
+        left, top = self.state['coordinate'][0]
+        right, bottom = self.state['coordinate'][1]
         w, h = (right - left) / 4, (bottom - top) / 4
         for i in range(16):
             x = left + (i % 4) * w + w / 2
