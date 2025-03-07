@@ -14,6 +14,7 @@ from pynput import keyboard, mouse
 import pygame
 from pygame import mixer
 """
+修正了一些bug
 新增预览播放功能，暂缺游戏音频文件
 """
 the_title = "卡拉彼丘琴房助手 v1.4.1 (25.3.7)"
