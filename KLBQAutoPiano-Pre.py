@@ -11,9 +11,13 @@ import pyautogui
 import win32gui
 import win32con
 from pynput import keyboard, mouse
+import pygame
+from pygame import mixer
 """
+新增预览播放功能，暂缺游戏音频文件
 """
-the_title = "卡拉彼丘琴房助手 v1.3.9 (25.3.7)"
+the_title = "卡拉彼丘琴房助手 v1.4.1 (25.3.7)"
+
 
 class GlobalHotkey:
     """热键监控"""
@@ -38,7 +42,7 @@ class GlobalHotkey:
             }) as h:
                 self.hotkeys = h
                 while self.running:
-                    time.sleep(0.01)
+                    time.sleep(0.001)
                     h.join(0.1)
 
         self.listener_thread = threading.Thread(target=listen, daemon=True)
@@ -52,13 +56,41 @@ class GlobalHotkey:
 
 class SheetEditor:
     """乐谱管理器界面"""
+    def __init__(self, player):
 
-    def __init__(self, app):
-        self.app = app
+        self.app = player
         self.edit_window = None
+        self.listbox = None
         self.current_beat = 0.0
         self.key_buttons = []
         self.selected_index = -1  # 新增选中音符索引
+
+        self.preview_playing = False  # 新增预览播放状态
+        self.preview_thread = None    # 新增预览线程
+        self.sound_blocks = {}  # 存储音阶与声音文件的映射
+        self.load_files = False
+
+        # 初始化音频系统
+        pygame.init()
+        mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+
+    def load_sound_files(self):
+        """加载声音文件"""
+        sound_dir = "sounds"  # 声音文件存放目录
+        if not os.path.exists(sound_dir):
+            print("未找到文件目录sounds")
+            return
+        # 支持多格式音频文件
+        for file in os.listdir(sound_dir):
+            if file.lower().endswith(('.wav', '.mp3', '.ogg')):
+                try:
+                    # 从文件名提取音阶编号（例如："1.wav" -> 1）
+                    block_num = int(os.path.splitext(file)[0].strip('.'))
+                    path = os.path.join(sound_dir, file)
+                    self.sound_blocks[block_num] = mixer.Sound(path)
+                except (ValueError, pygame.error) as e:
+                    print(f"声音加载失败：{file} - {str(e)}")
+        self.load_files = True
 
     def create_editor(self):
         """创建窗口"""
@@ -144,14 +176,15 @@ class SheetEditor:
         control_frame = ttk.Frame(self.edit_window)
         control_frame.pack(fill='x', padx=5, pady=5)
         # 插入音节
-        self.note_entry = ttk.Entry(control_frame, width=8)
+        self.note_entry = ttk.Entry(control_frame, width=4)
         self.note_entry.pack(side='left', padx=2)
         self.note_entry.insert(0, "")
         # 控制按钮
-        ttk.Button(control_frame, text="插入(向前)", command=self.insert_note).pack(side='left', padx=2)
-        ttk.Button(control_frame, text="删除(当前)", command=self.delete_note).pack(side='left', padx=2)
-        ttk.Button(control_frame, text="播放试听", command=self.play_preview).pack(side='right', padx=2)
-        ttk.Button(control_frame, text="保存乐谱", command=self.save_sheet).pack(side='right', padx=2)
+        ttk.Button(control_frame, text="插入(向前)", command=self.insert_note, width=10).pack(side='left', padx=2)
+        ttk.Button(control_frame, text="删除(当前)", command=self.delete_note, width=10).pack(side='left', padx=2)
+        ttk.Button(control_frame, text="保存乐谱", command=self.save_sheet, width=8).pack(side='right', padx=2)
+        ttk.Button(control_frame, text="停止预览", command=self.stop_preview, width=8).pack(side='right', padx=2)  # 新增停止按钮
+        ttk.Button(control_frame, text="播放试听", command=self.play_preview, width=8).pack(side='right', padx=2)
 
         self.refresh_list()
 
@@ -192,7 +225,6 @@ class SheetEditor:
 
     def insert_note(self):
         """在选中位置前插入新音符"""
-        # print(self.selected_index)
         try:
             beat = float(self.beat_entry.get())
             block = int(self.note_entry.get())
@@ -207,7 +239,6 @@ class SheetEditor:
                     self.selected_index = -1
                     self.refresh_list()
                     self.app.refresh_sheet_display()
-
                 else:
                     messagebox.showerror("错误", "不存在的音节")
             else:
@@ -225,7 +256,74 @@ class SheetEditor:
                 self.selected_index = -1
 
     def play_preview(self):
-        pass
+        """新增预览播放方法"""
+        if not self.load_files:
+            self.load_sound_files()
+            self.app.update_status("载入预览按键音频成功")# 初始化时加载声音文件
+        if self.preview_playing:
+            return
+        try:
+            # 获取预览参数
+            bpm = int(self.app.bpm_entry.get())
+            notes = self.app.sheet_data
+            if not notes:
+                messagebox.showinfo("提示", "乐谱为空")
+                return
+        except ValueError:
+            messagebox.showerror("错误", "无效的BPM值")
+            return
+
+        self.preview_playing = True
+        self.preview_thread = threading.Thread(
+            target=self.run_preview,
+            args=(bpm, notes),
+            daemon=True
+        )
+        self.preview_thread.start()
+
+    def run_preview(self, bpm, notes):
+        """新增预览播放核心逻辑"""
+        base_delay = 60 / bpm  # 每拍基础时间
+        channel = mixer.Channel(0)  # 使用独立音频通道
+        try:
+            for idx, note in enumerate(notes):
+                if not self.preview_playing:
+                    break
+
+                # 更新界面显示
+                self.listbox.selection_clear(0, tk.END)
+                self.listbox.selection_set(idx)
+                self.listbox.see(idx)
+                self.edit_window.update()
+
+                # 节拍非空播放对应声音
+                beat, block = note['beat'], note['block']
+                if beat > 0 and block != 0:
+                    if block in self.sound_blocks:
+                        try:
+                            if channel.get_busy():  # 停止前一个音
+                                channel.stop()
+                            channel.play(self.sound_blocks[block])
+                        except pygame.error as e:
+                            print(f"播放失败：{str(e)}")
+                # 计算节拍等待时间（考虑正负节拍）
+                wait_time = abs(beat) * base_delay
+                time.sleep(wait_time)
+
+                # 更新主界面高亮
+                self.app.highlight_note(idx)
+                self.app.sheet_canvas.xview_moveto(idx / len(notes))
+        finally:
+            channel.stop()
+            self.preview_playing = False
+            self.listbox.selection_clear(0, tk.END)
+            self.app.highlight_note(-1)  # 清除高亮
+
+    def stop_preview(self):
+        """新增停止预览方法"""
+        self.preview_playing = False
+        if self.preview_thread and self.preview_thread.is_alive():
+            self.preview_thread.join(0.5)
 
     def new_sheet(self):
         """新建乐谱"""
@@ -240,6 +338,7 @@ class SheetEditor:
 
     def on_editor_close(self):
         """处理编辑器窗口关闭事件"""
+        self.stop_preview()  # 关闭时停止预览
         if self.edit_window:
             self.edit_window.destroy()
         self.edit_window = None  # 清除窗口引用
@@ -250,12 +349,9 @@ class MusicAutoPlayer:
     """控制器主界面"""
     def __init__(self):
         self.window = self.create_window()
-
-        # 必须先初始化编辑器
         self.sheet_editor = SheetEditor(self)  # 新增编辑器实例
         self.sheet_data = []  # 新增乐谱数据初始化
         self.current_file = None  # 新增当前文件路径存储
-
         self.init_ui()  # UI初始化必须在编辑器之后
         self.state = {
             'playing': False,
@@ -283,7 +379,6 @@ class MusicAutoPlayer:
 
     def init_ui(self):
         """2、初始化界面组件"""
-
         # 总控制面板
         control_frame = ttk.LabelFrame(self.window, text="控制面板")
         control_frame.grid(row=0, column=0, padx=10, pady=5, sticky='nsew')
@@ -319,8 +414,6 @@ class MusicAutoPlayer:
         play_frame = ttk.LabelFrame(self.window, text="演奏控制")
         play_frame.grid(row=3, column=0, padx=10, pady=5, sticky='nsew')
 
-        # self.load_button = ttk.Button(play_frame, text="加载乐谱", command=self.load_sheet)
-        # self.load_button.grid(row=0, column=0, sticky='nsew')
         control_play_frame = ttk.Frame(play_frame)
         control_play_frame.pack(pady=0)
 
@@ -393,18 +486,15 @@ class MusicAutoPlayer:
 
     def check_window_active(self):
         """5-1、定时检测窗口激活状态"""
-        # if self.state['playing'] and not self.is_window_active():
-        #     self.toggle_pause()
-        #     self.update_status("窗口未激活，自动暂停", 'orange')
-        # self.window.after(1000, self.check_window_active)
-        pass
+        if self.state['playing'] and not self.is_window_active():
+            self.toggle_pause()
+            self.update_status("窗口未激活，自动暂停", 'orange')
+        self.window.after(1000, self.check_window_active)
 
     def is_window_active(self):
         """5-2、检测游戏窗口是否激活"""
         try:
             active_hwnd = win32gui.GetForegroundWindow()
-            title = win32gui.GetWindowText(active_hwnd)
-            # print(title)
             return active_hwnd == self.state['hwnd']
         except:
             return False
@@ -572,13 +662,11 @@ class MusicAutoPlayer:
                     if not self.state['playing']: return
                     if not self.state['paused'] and self.is_window_active():
                         break
-                    # time.sleep(0.001)
 
                 # 节拍同步  记录空节拍时间
                 target_time = abs(note['beat']) * delay
                 while time.time() - start_time < target_time:
                     if not self.state['playing'] or self.state['paused']: break
-                    # time.sleep(0.001)
 
                 # 界面更新
                 self.window.after(0, self.highlight_note, idx)
@@ -595,10 +683,7 @@ class MusicAutoPlayer:
                     x += random.gauss(0, mouse_shift)
                     y += random.gauss(0, mouse_shift)
                     pyautogui.moveTo(x, y, duration=random.uniform(target_time*0.85, target_time*0.95))
-                    stime = time.time() - start_time
                     pyautogui.click()
-                    stime2 = time.time() - start_time
-                    print(stime2-stime)
                 else:
                     # 空节拍延时
                     time.sleep(random.uniform(target_time*0.95, target_time*1.05))
@@ -626,8 +711,7 @@ class MusicAutoPlayer:
             self.state['current_note'] = idx
 
     def refresh_sheet_display(self):
-        """刷新乐谱显示"""
-        # 清空主界面底部乐谱现有显示
+        """刷新主界面乐谱显示"""
         for col in self.note_labels.values():
             for widget in col:
                 widget.destroy()
@@ -650,7 +734,6 @@ class MusicAutoPlayer:
         # 判断编辑器窗口是否存在后再刷新
         if self.sheet_editor.edit_window:
             try:
-                # if self.sheet_editor.edit_window and hasattr(self.sheet_editor, 'edit_window'):
                 if self.sheet_editor.edit_window.winfo_exists():
                     self.sheet_editor.refresh_list()
             except Exception as e:
@@ -695,8 +778,5 @@ class MusicAutoPlayer:
 
 
 if __name__ == "__main__":
-    # if ctypes.windll.shell32.IsUserAnAdmin() == 0:
-    #     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
-    #     sys.exit()
     app = MusicAutoPlayer()
     app.window.mainloop()
