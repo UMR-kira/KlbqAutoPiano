@@ -1,7 +1,8 @@
 import ctypes
+import os
 import sys
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 import json
 import threading
 import time
@@ -10,10 +11,14 @@ import pyautogui
 import win32gui
 import win32con
 from pynput import keyboard, mouse
+"""
+新增乐谱编辑器
+"""
+the_title = "卡拉彼丘琴房助手 v1.3 (25.3.7)"
 
-the_title = "卡拉彼丘琴房助手 v1.2 (25.3.2)"
 
 class GlobalHotkey:
+    """热键监控"""
     def __init__(self, play, pause, stop):
         self.hotkeys = None
         self.play = play
@@ -46,10 +51,208 @@ class GlobalHotkey:
         if self.hotkeys:
             self.hotkeys.stop()
 
+
+class SheetEditor:
+    """乐谱管理器界面"""
+    def __init__(self, app):
+        self.app = app
+        self.edit_window = None
+        self.current_beat = 0.0
+        self.key_buttons = []
+        self.selected_index = -1  # 新增选中音符索引
+
+    def create_editor(self):
+        """创建窗口"""
+        if self.edit_window and self.edit_window.winfo_exists():
+            self.edit_window.lift()
+            return
+
+        # 编辑器页面
+        self.edit_window = tk.Toplevel(self.app.window)
+        # 新增窗口关闭协议
+        self.edit_window.protocol("WM_DELETE_WINDOW", self.on_editor_close)
+
+        self.edit_window.title("乐谱编辑器")
+        self.edit_window.geometry("800x750")
+
+        # 置顶控制栏
+        top_control = ttk.Frame(self.edit_window)
+        top_control.pack(fill='x', padx=5, pady=2)
+
+        # 节拍控制
+        beat_frame = ttk.Frame(top_control)
+        beat_frame.pack(side='left', padx=5)
+        ttk.Label(beat_frame, text="当前节拍").pack(side='left')
+        self.beat_entry = ttk.Entry(beat_frame, width=8)
+        self.beat_entry.insert(0, "0.25")
+        self.beat_entry.pack(side='left', padx=2)
+        ttk.Button(beat_frame, text="半拍", width=5,
+                   command=lambda: self.adjust_beat(0.125)).pack(side='left')
+        ttk.Button(beat_frame, text="一拍", width=5,
+                   command=lambda: self.adjust_beat(0.25)).pack(side='left')
+        ttk.Button(beat_frame, text="空半拍", width=8,
+                   command=lambda: self.adjust_beat(-0.125)).pack(side='left')
+        ttk.Button(beat_frame, text="空一拍", width=8,
+                   command=lambda: self.adjust_beat(-0.25)).pack(side='left')
+
+        ttk.Checkbutton(top_control, text="窗口置顶",
+                        command=lambda: self.edit_window.attributes('-topmost',
+                        not self.edit_window.attributes('-topmost'))).pack(side='right')
+
+        # 主内容区
+        main_frame = ttk.Frame(self.edit_window)
+        main_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # 左侧按钮矩阵
+        left_frame = ttk.Frame(main_frame)
+        left_frame.pack(side='left', fill='y', padx=5)
+
+        matrix_frame = ttk.LabelFrame(left_frame, text="音阶矩阵 (1-16)")
+        matrix_frame.pack(pady=5)
+
+        # 创建一个自定义样式来调整按钮的高度
+        style = ttk.Style()
+        style.configure("Tall.TButton", padding=(10, 20))  # 调整 padding 来控制高度
+
+        for row in range(4):
+            frame_row = ttk.Frame(matrix_frame)
+            frame_row.pack()
+            for col in range(4):
+                btn_num = (3 - row) * 4 + col + 1  # 修正矩阵布局
+                btn = ttk.Button(frame_row, text=str(btn_num), width=5,
+                                 style="Tall.TButton",  # 应用自定义样式
+                                 command=lambda b=btn_num: self.add_by_button(b))
+                btn.pack(side='left', padx=5, pady=5)
+                self.key_buttons.append(btn)
+
+        # 右侧音符列表
+        list_frame = ttk.LabelFrame(main_frame, text="乐谱列表")
+        list_frame.pack(side='right', fill='both', expand=True, padx=5)
+
+        # 滚动条
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side='right', fill='y')
+
+        self.listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
+                                  selectmode='single', width=30)
+        self.listbox.pack(fill='both', expand=True)
+        scrollbar.config(command=self.listbox.yview)
+
+        # 绑定选择事件
+        self.listbox.bind('<<ListboxSelect>>', self.on_select)
+
+        # 底部控制按钮
+        control_frame = ttk.Frame(self.edit_window)
+        control_frame.pack(fill='x', padx=5, pady=5)
+        # 插入音节
+        self.note_entry = ttk.Entry(control_frame, width=8)
+        self.note_entry.pack(side='left', padx=2)
+        self.note_entry.insert(0, "")
+        # 控制按钮
+        ttk.Button(control_frame, text="插入(向前)", command=self.insert_note).pack(side='left', padx=2)
+        ttk.Button(control_frame, text="删除(当前)", command=self.delete_note).pack(side='left', padx=2)
+        ttk.Button(control_frame, text="播放试听", command=self.play_preview).pack(side='right', padx=2)
+        ttk.Button(control_frame, text="保存乐谱", command=self.save_sheet).pack(side='right', padx=2)
+
+        self.refresh_list()
+
+    def add_by_button(self, block):
+        """通过按键插入音节"""
+        try:
+            beat = float(self.beat_entry.get())
+            # beat负数，空音节置空
+            if beat < 0:
+                block = 0
+            self.app.sheet_data.append({'beat': beat, 'block': block})
+            self.app.refresh_sheet_display()
+        except ValueError:
+            messagebox.showerror("错误", "未知错误，获取音节失败")
+
+    def adjust_beat(self, delta):
+        """调整节拍值"""
+        try:
+            self.beat_entry.delete(0, tk.END)
+            self.beat_entry.insert(0, delta)
+
+        except ValueError:
+            self.beat_entry.delete(0, tk.END)
+            self.beat_entry.insert(0, "0")
+
+    def refresh_list(self):
+        """刷新编辑器乐谱列表"""
+        if self.edit_window and self.edit_window.winfo_exists():
+            self.listbox.delete(0, tk.END)
+            for note in self.app.sheet_data:
+                self.listbox.insert(tk.END, f"节拍: {note['beat']:.3f} | 方块: {note['block']}")
+
+    def on_select(self, event):
+        """处理列表选择事件"""
+        selection = self.listbox.curselection()
+        if selection:
+            self.selected_index = selection[0]
+
+    def insert_note(self):
+        """在选中位置前插入新音符"""
+        try:
+            beat = float(self.beat_entry.get())
+            block = int(self.note_entry.get())
+            if self.selected_index >= 0:
+                if 0 <= block <= 16:
+                    # 自动纠错 0按键只能为负，非0按键只能为正
+                    if block == 0: beat = -abs(beat)
+                    else: beat = abs(beat)
+                    new_note = {'beat': beat, 'block': block}
+                    insert_index = self.selected_index
+                    self.app.sheet_data.insert(insert_index, new_note)
+                    self.selected_index = -1
+                    self.refresh_list()
+                    self.app.refresh_sheet_display()
+                else:
+                    messagebox.showerror("错误", "不存在的音节")
+            else:
+                messagebox.showerror("错误", "未选择右侧音节")
+        except ValueError:
+            messagebox.showerror("错误", "获取音节失败")
+
+    def delete_note(self):
+        """删除选中音符"""
+        if self.selected_index >= 0 and hasattr(self.app, 'sheet_data'):
+            if len(self.app.sheet_data) > self.selected_index:
+                del self.app.sheet_data[self.selected_index]
+                self.refresh_list()
+                self.app.refresh_sheet_display()
+                self.selected_index = -1
+
+    def play_preview(self):
+        pass
+
+    def new_sheet(self):
+        """新建乐谱"""
+        self.app.new_sheet()
+        self.refresh_list()
+        self.beat_entry.delete(0, tk.END)
+        self.beat_entry.insert(0, "0")
+
+    def save_sheet(self):
+        """保存乐谱"""
+        self.app.save_sheet()
+
+    def on_editor_close(self):
+        """处理编辑器窗口关闭事件"""
+        if self.edit_window:
+            self.edit_window.destroy()
+        self.edit_window = None  # 清除窗口引用
+        self.listbox = None  # 清除listbox引用
+
+
 class MusicAutoPlayer:
+    """控制器主界面"""
     def __init__(self):
         self.window = self.create_window()
-        self.init_ui()
+        self.sheet_editor = SheetEditor(self)  # 新增编辑器实例
+        self.sheet_data = []  # 新增乐谱数据初始化
+        self.current_file = None  # 新增当前文件路径存储
+        self.init_ui()  # UI初始化必须在编辑器之后
         self.state = {
             'playing': False,
             'paused': False,
@@ -65,13 +268,15 @@ class MusicAutoPlayer:
         self.note_labels = {'beat': [], 'block': []}  # 新增初始化
         self.setup_listeners()
         self.check_window_active()
+
     def create_window(self):
         """1、创建主窗口"""
         window = tk.Tk()
         window.title(the_title)
-        window.geometry("700x700")
+        window.geometry("700x750")
         window.columnconfigure(0, weight=1)
         return window
+
     def init_ui(self):
         """2、初始化界面组件"""
         # 总控制面板
@@ -109,44 +314,50 @@ class MusicAutoPlayer:
         play_frame = ttk.LabelFrame(self.window, text="演奏控制")
         play_frame.grid(row=3, column=0, padx=10, pady=5, sticky='nsew')
 
-        self.load_button = ttk.Button(play_frame, text="加载乐谱", command=self.load_sheet)
-        self.load_button.grid(row=0, column=0, sticky='nsew')
+        control_play_frame = ttk.Frame(play_frame)
+        control_play_frame.pack(pady=0)
 
-        self.start_button = ttk.Button(play_frame, text="开始 (F10)", command=self.start_playing)
-        self.start_button.grid(row=0, column=1, sticky='nsew')
+        self.start_button = ttk.Button(control_play_frame, text="开始 (F10)", command=self.start_playing)
+        self.start_button.grid(row=0, column=0, sticky='nsew')
 
-        self.pause_button = ttk.Button(play_frame, text="⏸ 暂停 (F11)", command=self.toggle_pause)
-        self.pause_button.grid(row=0, column=2, sticky='nsew')
+        self.pause_button = ttk.Button(control_play_frame, text="⏸ 暂停 (F11)", command=self.toggle_pause)
+        self.pause_button.grid(row=0, column=1, sticky='nsew')
 
-        self.stop_button = ttk.Button(play_frame, text="■ 停止 (F12)", command=self.stop_playing)
-        self.stop_button.grid(row=0, column=3, sticky='nsew')
-
+        self.stop_button = ttk.Button(control_play_frame, text="■ 停止 (F12)", command=self.stop_playing)
+        self.stop_button.grid(row=0, column=2, sticky='nsew')
 
         # 第五行 演奏设置
         play_setting_frame = ttk.LabelFrame(self.window, text="演奏设置")
         play_setting_frame.grid(row=4, column=0, padx=10, pady=5, sticky='nsew')
         # BPM设置
-        ttk.Label(play_setting_frame, text="BPM").grid(row=0, column=0, sticky='nsew')
-        self.bpm_entry = ttk.Entry(play_setting_frame, width=8)
+        ttk.Label(play_setting_frame, text="BPM速度").grid(row=0, column=0, sticky='nsew')
+        self.bpm_entry = ttk.Entry(play_setting_frame, width=6)
         self.bpm_entry.insert(0, "60")
         self.bpm_entry.grid(row=0, column=1, padx=5, sticky='nsew')
-        ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=8).grid(row=0, column=2, sticky='nsew')
+        ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=6).grid(row=0, column=2, sticky='nsew')
         # 抖动设置
-        ttk.Label(play_setting_frame, text="鼠标抖动").grid(row=0, column=3, sticky='nsew')
-        self.mouse_move = ttk.Entry(play_setting_frame, width=8)
+        ttk.Label(play_setting_frame, text="鼠标抖动").grid(row=0, column=3, sticky='e')
+        self.mouse_move = ttk.Entry(play_setting_frame, width=6)
         self.mouse_move.insert(0, "10")
         self.mouse_move.grid(row=0, column=4, padx=5)
-        ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=8).grid(row=0, column=5, sticky='nsew')
+        ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=6).grid(row=0, column=5, sticky='e')
 
-        # 第六行 乐谱显示
-        sheet_frame = ttk.LabelFrame(self.window, text="乐谱")
-        sheet_frame.grid(row=5, column=0, padx=10, pady=5, sticky='nsew')  # 调整到第7行
+        # 第六行 乐谱控制
+        sheet_frame = ttk.LabelFrame(self.window, text="乐谱管理")
+        sheet_frame.grid(row=5, column=0, padx=10, pady=5, sticky='nsew')
+
+        control_btn_frame = ttk.Frame(sheet_frame)
+        control_btn_frame.pack(pady=5)
+
+        ttk.Button(control_btn_frame, text="🎹 打开编辑器", command=self.sheet_editor.create_editor).pack(side='left', padx=5)
+        ttk.Button(control_btn_frame, text="加载乐谱", command=self.load_sheet).pack(side='left', padx=5)
+        ttk.Button(control_btn_frame, text="清空乐谱", command=self.new_sheet).pack(side='left', padx=5)
 
         # 左侧固定行名
         left_header = ttk.Frame(sheet_frame)
         left_header.pack(side='left', fill='y')
-        ttk.Label(left_header, text="节拍", width=4, relief="raised").grid(row=0, column=0, padx=5, pady=5)
-        ttk.Label(left_header, text="方块", width=4, relief="raised").grid(row=1, column=0, padx=5, pady=5)
+        ttk.Label(left_header, text="节拍", width=4, relief="raised").grid(row=0, column=0, padx=5, pady=2)
+        ttk.Label(left_header, text="方块", width=4, relief="raised").grid(row=1, column=0, padx=5, pady=2)
 
         # 右侧可滚动区域
         right_canvas_frame = ttk.Frame(sheet_frame)
@@ -178,20 +389,18 @@ class MusicAutoPlayer:
         if self.state['playing'] and not self.is_window_active():
             self.toggle_pause()
             self.update_status("窗口未激活，自动暂停", 'orange')
-        self.window.after(500, self.check_window_active)
+        self.window.after(1000, self.check_window_active)
 
     def is_window_active(self):
         """5-2、检测游戏窗口是否激活"""
         try:
             active_hwnd = win32gui.GetForegroundWindow()
-            title = win32gui.GetWindowText(active_hwnd)
-            print(title)
             return active_hwnd == self.state['hwnd']
         except:
-
             return False
 
     """-----------------以下为实际功能-----------------"""
+
     def toggle_topmost(self):
         """1、切换置顶状态"""
         current = self.window.attributes('-topmost')
@@ -199,6 +408,7 @@ class MusicAutoPlayer:
 
     def capture_window(self):
         """2、捕捉游戏窗口"""
+
         def on_click(x, y, button, pressed):
             if pressed and button == mouse.Button.left:
                 hwnd = win32gui.WindowFromPoint((x, y))
@@ -209,6 +419,7 @@ class MusicAutoPlayer:
                     self.state.update(hwnd=root_hwnd, rect=rect)
                     self.update_status(f"已捕捉：{title}", 'green')
                     return False
+
         self.update_status("请点击游戏窗口任意位置...", 'blue')
         mouse.Listener(on_click=on_click).start()
 
@@ -217,12 +428,14 @@ class MusicAutoPlayer:
         if not self.state['hwnd']:
             self.update_status("请先捕捉窗口", 'red')
             return
+
         def on_click(x, y, button, pressed):
             if pressed and button == mouse.Button.left:
                 self.state['coordinate'][corner] = (x, y)
                 self.cal_labels[corner].config(text=f"({x}, {y})", foreground='green')
                 self.calculate_blocks()
                 return False
+
         self.update_status(f"请点击{'左上' if corner == 0 else '右下'}角...", 'blue')
         mouse.Listener(on_click=on_click).start()
 
@@ -244,37 +457,32 @@ class MusicAutoPlayer:
         path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
         if not path: return
         try:
-            with open(path) as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # 添加数据有效性验证
-                if not all(k in data for k in ('notes', 'bpm')):
-                    raise ValueError("Invalid sheet format")
+                # 严格数据验证
+                if not isinstance(data, dict):
+                    self.update_status("格式存在问题", 'green')
+                if 'bpm' not in data or not isinstance(data['bpm'], (int, float)):
+                    self.update_status("缺少bpm", 'green')
+                if 'notes' not in data or not isinstance(data['notes'], list):
+                    self.update_status("缺少notes", 'green')
+                for note in data['notes']:
+                    if 'beat' not in note or 'block' not in note:
+                        self.update_status("音节数据缺少beat或block")
+                    if not (0 <= note['block'] <= 16):
+                        self.update_status("方块编号必须在0-16之间")
 
-                self.sheet_data = sorted(data['notes'], key=lambda x: x['beat'])
+                self.state['bpm'] = data['bpm']  # 新增状态更新
+                self.sheet_data = data['notes']  # 新增数据同步
                 self.bpm_entry.delete(0, tk.END)
                 self.bpm_entry.insert(0, str(data['bpm']))
+                self.refresh_sheet_display()  # 调用主界面刷新方法
+                self.sheet_editor.refresh_list()  # 主动刷新编辑器
 
-            # 清除旧标签（修复索引越界问题）
-            for col in self.note_labels.values():
-                for widget in col:
-                    widget.destroy()
-            self.note_labels['beat'].clear()
-            self.note_labels['block'].clear()
-
-            # 创建新标签（调整列索引）
-            for col_idx, note in enumerate(self.sheet_data):
-                beat_lbl = ttk.Label(self.sheet_table, text=f"{note['beat']:.2f}", width=6)
-                beat_lbl.grid(row=0, column=col_idx, padx=2, pady=2)
-                self.note_labels['beat'].append(beat_lbl)
-
-                block_lbl = ttk.Label(self.sheet_table, text=note['block'], width=6)
-                block_lbl.grid(row=1, column=col_idx, padx=2, pady=2)
-                self.note_labels['block'].append(block_lbl)
-
-            self.sheet_canvas.xview_moveto(0)
-            self.update_status(f"已加载乐谱：{path.split('/')[-1]}，BPM{data['bpm']}", 'green')
+            # 读取提示
+            self.update_status(f"成功加载乐谱: {os.path.basename(path)}", 'green')
         except Exception as e:
-            self.update_status(f"加载失败：{str(e)}", 'red')
+            self.update_status(f"加载失败: {str(e)}", 'red')
 
     def start_playing(self):
         """4-1、开始演奏"""
@@ -334,8 +542,17 @@ class MusicAutoPlayer:
     def play_notes(self):
         """6-1、演奏核心逻辑"""
         start_time = time.time()
+        # 键位映射：实际键位编号 → 原索引
+        index_map = [
+            12, 13, 14, 15,  # 坐标存储索引0-3 → 原索引12-15（对应13-16）
+            8, 9, 10, 11,  # 坐标存储4-7 → 原索引8-11（对应9-12）
+            4, 5, 6, 7,  # 坐标存储8-11 → 原索引4-7（对应5-8）
+            0, 1, 2, 3  # 坐标存储12-15 → 原索引0-3（对应1-4）
+        ]
+
         try:
             bpm = int(self.state['bpm'])
+            print(bpm)
             delay = 60 / bpm
 
             for idx, note in enumerate(self.sheet_data):
@@ -345,28 +562,31 @@ class MusicAutoPlayer:
                     if not self.state['playing']: return
                     if not self.state['paused'] and self.is_window_active():
                         break
-                    time.sleep(0.1)
-                # 节拍同步
-                target_time = note['beat'] * delay
+
+                # 节拍同步  记录空节拍时间
+                target_time = abs(note['beat']) * delay
                 while time.time() - start_time < target_time:
                     if not self.state['playing'] or self.state['paused']: break
-                    time.sleep(0.001)
 
                 # 界面更新
                 self.window.after(0, self.highlight_note, idx)
-                self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
-                block = note['block'] - 1
-
-                # 坐标移动模拟点击
-                mouse_shift = self.state.get('mouse')
-
-                x, y = self.state['blocks'][block]
-                x += random.gauss(0, mouse_shift)
-                y += random.gauss(0, mouse_shift)
-
-                pyautogui.moveTo(x, y, duration=random.uniform(0.1, 0.3))
-                pyautogui.click()
-
+                # 非空节拍才演奏
+                if note['beat'] > 0:
+                    self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
+                    # 取得索引
+                    block = note['block']-1
+                    mouse_shift = self.state.get('mouse')
+                    # 修改索引映射逻辑
+                    original_index = index_map[block]
+                    x, y = self.state['blocks'][original_index]
+                    # 坐标移动模拟点击
+                    x += random.gauss(0, mouse_shift)
+                    y += random.gauss(0, mouse_shift)
+                    pyautogui.moveTo(x, y, duration=random.uniform(target_time*0.85, target_time*0.95))
+                    pyautogui.click()
+                else:
+                    # 空节拍延时
+                    time.sleep(random.uniform(target_time*0.95, target_time*1.05))
         except Exception as e:
             self.update_status(f"演奏出错：{str(e)}", 'red')
         finally:
@@ -390,6 +610,66 @@ class MusicAutoPlayer:
                     pass
             self.state['current_note'] = idx
 
+    def refresh_sheet_display(self):
+        """刷新主界面乐谱显示"""
+        for col in self.note_labels.values():
+            for widget in col:
+                widget.destroy()
+        self.note_labels['beat'].clear()
+        self.note_labels['block'].clear()
+
+        # 重新生成显示
+        if hasattr(self, 'sheet_data'):
+            for col_idx, note in enumerate(self.sheet_data):
+                beat_lbl = ttk.Label(self.sheet_table, text=f"{note['beat']:.3f}", width=6)
+                beat_lbl.grid(row=0, column=col_idx, padx=2, pady=2)
+                self.note_labels['beat'].append(beat_lbl)
+                block_lbl = ttk.Label(self.sheet_table, text=note['block'], width=6)
+                block_lbl.grid(row=1, column=col_idx, padx=2, pady=2)
+                self.note_labels['block'].append(block_lbl)
+
+        # 主界面乐谱移动到开头
+        self.sheet_canvas.xview_moveto(0)
+
+        # 判断编辑器窗口是否存在后再刷新
+        if self.sheet_editor.edit_window:
+            try:
+                if self.sheet_editor.edit_window.winfo_exists():
+                    self.sheet_editor.refresh_list()
+            except Exception as e:
+                print(e)
+
+    def new_sheet(self):
+        """清空乐谱"""
+        self.sheet_data = []
+        if hasattr(self, 'current_file'):
+            del self.current_file
+        self.refresh_sheet_display()
+        self.update_status("已清空", 'green')
+
+    def save_sheet(self):
+        """保存乐谱"""
+        if not hasattr(self, 'sheet_data'):
+            self.update_status("没有可保存的乐谱数据", 'red')
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json")]
+        )
+        if path:
+            data = {
+                "bpm": self.state['bpm'],
+                "notes": self.sheet_data
+            }
+            try:
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+                self.current_file = path
+                self.update_status(f"乐谱已保存至: {path}", 'green')
+            except Exception as e:
+                self.update_status(f"保存失败: {str(e)}", 'red')
+
     def on_close(self):
         if self.state['hotkeys']:
             self.state['hotkeys'].stop_listener()
@@ -398,8 +678,5 @@ class MusicAutoPlayer:
 
 
 if __name__ == "__main__":
-    # if ctypes.windll.shell32.IsUserAnAdmin() == 0:
-    #     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
-    #     sys.exit()
     app = MusicAutoPlayer()
     app.window.mainloop()
