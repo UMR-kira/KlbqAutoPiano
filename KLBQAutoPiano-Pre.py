@@ -1,6 +1,4 @@
-import ctypes
 import os
-import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json
@@ -14,10 +12,9 @@ from pynput import keyboard, mouse
 import pygame
 from pygame import mixer
 """
-修正了一些bug
 新增预览播放功能，暂缺游戏音频文件
 """
-the_title = "卡拉彼丘琴房助手 v1.4.1 (25.3.7)"
+the_title = "卡拉彼丘琴房助手 v1.4.2 (25.3.7)"
 
 
 class GlobalHotkey:
@@ -69,7 +66,7 @@ class SheetEditor:
         self.preview_playing = False  # 新增预览播放状态
         self.preview_thread = None    # 新增预览线程
         self.sound_blocks = {}  # 存储音阶与声音文件的映射
-        self.load_files = False
+        self.load_files_status = False
 
         # 初始化音频系统
         pygame.init()
@@ -79,7 +76,7 @@ class SheetEditor:
         """加载声音文件"""
         sound_dir = "sounds"  # 声音文件存放目录
         if not os.path.exists(sound_dir):
-            print("未找到文件目录sounds")
+            messagebox.showinfo("提示", "未发现音频目录")
             return
         # 支持多格式音频文件
         for file in os.listdir(sound_dir):
@@ -90,10 +87,11 @@ class SheetEditor:
                     path = os.path.join(sound_dir, file)
                     self.sound_blocks[block_num] = mixer.Sound(path)
                 except:
+                    messagebox.showinfo("错误", "读取音频失败")
                     self.app.update_status("载入音频失败")
                     return
-            self.load_files = True
-            self.app.update_status("载入音频成功")
+        self.load_files_status = True
+        self.app.update_status("载入音频成功")
 
     def create_editor(self):
         """创建窗口"""
@@ -260,28 +258,31 @@ class SheetEditor:
 
     def play_preview(self):
         """新增预览播放方法"""
-        if not self.load_files:
-            self.load_sound_files()
+        # 防止重复点击播放
         if self.preview_playing:
             return
-        try:
-            # 获取预览参数
-            bpm = int(self.app.bpm_entry.get())
-            notes = self.app.sheet_data
-            if not notes:
-                messagebox.showinfo("提示", "乐谱为空")
+        if not self.load_files_status:
+            self.load_sound_files()
+        # 读取成功才能预览播放
+        if self.load_files_status:
+            try:
+                # 获取预览参数
+                bpm = int(self.app.bpm_entry.get())
+                notes = self.app.sheet_data
+                if not notes:
+                    messagebox.showinfo("提示", "乐谱为空")
+                    return
+            except ValueError:
+                messagebox.showerror("错误", "无效的BPM值")
                 return
-        except ValueError:
-            messagebox.showerror("错误", "无效的BPM值")
-            return
 
-        self.preview_playing = True
-        self.preview_thread = threading.Thread(
-            target=self.run_preview,
-            args=(bpm, notes),
-            daemon=True
-        )
-        self.preview_thread.start()
+            self.preview_playing = True
+            self.preview_thread = threading.Thread(
+                target=self.run_preview,
+                args=(bpm, notes),
+                daemon=True
+            )
+            self.preview_thread.start()
 
     def run_preview(self, bpm, notes):
         """新增预览播放核心逻辑"""
@@ -298,7 +299,7 @@ class SheetEditor:
                 self.listbox.see(idx)
                 self.edit_window.update()
 
-                # 节拍非空播放对应声音
+                # 节拍非空，播放对应声音
                 beat, block = note['beat'], note['block']
                 if beat > 0 and block != 0:
                     if block in self.sound_blocks:
@@ -307,7 +308,7 @@ class SheetEditor:
                                 channel.stop()
                             channel.play(self.sound_blocks[block])
                         except pygame.error as e:
-                            print(f"播放失败：{str(e)}")
+                            messagebox.showerror("错误", f"播放失败：{str(e)}")
                 # 计算节拍等待时间（考虑正负节拍）
                 wait_time = abs(beat) * base_delay
                 time.sleep(wait_time)
@@ -543,9 +544,9 @@ class MusicAutoPlayer:
 
     def calculate_blocks(self):
         """3-2、计算方块坐标"""
-        if None in self.state['coordinate']: return
-        left, top = self.state['coordinate'][0]
-        right, bottom = self.state['coordinate'][1]
+        if None in self.state['coordinate']:
+            return
+        left, top, right, bottom = self.state['coordinate'][0], self.state['coordinate'][1]
         w, h = (right - left) / 4, (bottom - top) / 4
         for i in range(16):
             x = left + (i % 4) * w + w / 2
