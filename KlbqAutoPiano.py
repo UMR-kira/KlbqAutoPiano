@@ -1,6 +1,4 @@
-import ctypes
 import os
-import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json
@@ -11,10 +9,12 @@ import pyautogui
 import win32gui
 import win32con
 from pynput import keyboard, mouse
+import pygame
+from pygame import mixer
 """
-新增乐谱编辑器
+修复预览播放功能，暂缺游戏音频文件
 """
-the_title = "卡拉彼丘琴房助手 v1.3 (25.3.7)"
+the_title = "卡拉彼丘琴房助手 v1.4.3 (25.3.7)"
 
 
 class GlobalHotkey:
@@ -40,7 +40,7 @@ class GlobalHotkey:
             }) as h:
                 self.hotkeys = h
                 while self.running:
-                    time.sleep(0.01)
+                    time.sleep(0.001)
                     h.join(0.1)
 
         self.listener_thread = threading.Thread(target=listen, daemon=True)
@@ -54,12 +54,55 @@ class GlobalHotkey:
 
 class SheetEditor:
     """乐谱管理器界面"""
-    def __init__(self, app):
-        self.app = app
+    def __init__(self, player):
+
+        self.app = player
         self.edit_window = None
+        self.listbox = None
         self.current_beat = 0.0
         self.key_buttons = []
         self.selected_index = -1  # 新增选中音符索引
+
+        self.preview_playing = False  # 新增预览播放状态
+        self.preview_thread = None    # 新增预览线程
+        self.sound_blocks = {}  # 存储音阶与声音文件的映射
+        self.load_files_status = False
+
+        # 初始化音频系统
+        pygame.init()
+        mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+
+    def load_sound_files(self):
+        """加载声音文件"""
+        sound_dir = "sounds"
+        if not os.path.exists(sound_dir):
+            messagebox.showinfo("提示", "未发现音频目录")
+            return
+        # 支持多格式音频文件
+        sound_files = os.listdir(sound_dir)
+        if len(sound_files) == 0:
+            messagebox.showinfo("错误", "文件夹为空")
+            self.app.update_status("载入音频失败")
+        for file in sound_files:
+            if file.lower().endswith(('.wav', '.mp3', '.ogg')):
+                try:
+                    # 从文件名提取音阶编号（例如："1.wav" -> 1）
+                    block_num = int(os.path.splitext(file)[0].strip('.'))
+                    path = os.path.join(sound_dir, file)
+                    self.sound_blocks[block_num] = mixer.Sound(path)
+                except:
+                    messagebox.showinfo("错误", "读取音频失败")
+                    self.app.update_status("载入音频失败")
+                    return
+        # len方法要带()调用
+        if self.sound_blocks.__len__() == 16:
+            self.load_files_status = True
+            self.app.update_status("载入音频成功")
+        else:
+            messagebox.showinfo("错误", "音频文件数量错误")
+            self.app.update_status("载入音频失败")
+            return
+
 
     def create_editor(self):
         """创建窗口"""
@@ -145,14 +188,15 @@ class SheetEditor:
         control_frame = ttk.Frame(self.edit_window)
         control_frame.pack(fill='x', padx=5, pady=5)
         # 插入音节
-        self.note_entry = ttk.Entry(control_frame, width=8)
+        self.note_entry = ttk.Entry(control_frame, width=4)
         self.note_entry.pack(side='left', padx=2)
         self.note_entry.insert(0, "")
         # 控制按钮
-        ttk.Button(control_frame, text="插入(向前)", command=self.insert_note).pack(side='left', padx=2)
-        ttk.Button(control_frame, text="删除(当前)", command=self.delete_note).pack(side='left', padx=2)
-        ttk.Button(control_frame, text="播放试听", command=self.play_preview).pack(side='right', padx=2)
-        ttk.Button(control_frame, text="保存乐谱", command=self.save_sheet).pack(side='right', padx=2)
+        ttk.Button(control_frame, text="插入(向前)", command=self.insert_note, width=10).pack(side='left', padx=2)
+        ttk.Button(control_frame, text="删除(当前)", command=self.delete_note, width=10).pack(side='left', padx=2)
+        ttk.Button(control_frame, text="保存乐谱", command=self.save_sheet, width=8).pack(side='right', padx=2)
+        ttk.Button(control_frame, text="停止预览", command=self.stop_preview, width=8).pack(side='right', padx=2)  # 新增停止按钮
+        ttk.Button(control_frame, text="播放试听", command=self.play_preview, width=8).pack(side='right', padx=2)
 
         self.refresh_list()
 
@@ -224,7 +268,76 @@ class SheetEditor:
                 self.selected_index = -1
 
     def play_preview(self):
-        pass
+        """新增预览播放方法"""
+        # 防止重复点击播放
+        if self.preview_playing:
+            return
+        if not self.load_files_status:
+            self.load_sound_files()
+        # 读取成功才能预览播放
+        if self.load_files_status:
+            try:
+                # 获取预览参数
+                bpm = int(self.app.bpm_entry.get())
+                notes = self.app.sheet_data
+                if not notes:
+                    messagebox.showinfo("提示", "乐谱为空")
+                    return
+            except ValueError:
+                messagebox.showerror("错误", "无效的BPM值")
+                return
+
+            self.preview_playing = True
+            self.preview_thread = threading.Thread(
+                target=self.run_preview,
+                args=(bpm, notes),
+                daemon=True
+            )
+            self.preview_thread.start()
+
+    def run_preview(self, bpm, notes):
+        """新增预览播放核心逻辑"""
+        base_delay = 60 / bpm  # 每拍基础时间
+        channel = mixer.Channel(0)  # 使用独立音频通道
+        try:
+            for idx, note in enumerate(notes):
+                if not self.preview_playing:
+                    break
+
+                # 更新界面显示
+                self.listbox.selection_clear(0, tk.END)
+                self.listbox.selection_set(idx)
+                self.listbox.see(idx)
+                self.edit_window.update()
+
+                # 节拍非空，播放对应声音
+                beat, block = note['beat'], note['block']
+                if beat > 0 and block != 0:
+                    if block in self.sound_blocks:
+                        try:
+                            if channel.get_busy():  # 停止前一个音
+                                channel.stop()
+                            channel.play(self.sound_blocks[block])
+                        except pygame.error as e:
+                            messagebox.showerror("错误", f"播放失败：{str(e)}")
+                # 计算节拍等待时间（考虑正负节拍）
+                wait_time = abs(beat) * base_delay
+                time.sleep(wait_time)
+
+                # 更新主界面高亮
+                self.app.highlight_note(idx)
+                self.app.sheet_canvas.xview_moveto(idx / len(notes))
+        finally:
+            channel.stop()
+            self.preview_playing = False
+            self.listbox.selection_clear(0, tk.END)
+            self.app.highlight_note(-1)  # 清除高亮
+
+    def stop_preview(self):
+        """新增停止预览方法"""
+        self.preview_playing = False
+        if self.preview_thread and self.preview_thread.is_alive():
+            self.preview_thread.join(0.5)
 
     def new_sheet(self):
         """新建乐谱"""
@@ -239,6 +352,7 @@ class SheetEditor:
 
     def on_editor_close(self):
         """处理编辑器窗口关闭事件"""
+        self.stop_preview()  # 关闭时停止预览
         if self.edit_window:
             self.edit_window.destroy()
         self.edit_window = None  # 清除窗口引用
@@ -441,9 +555,9 @@ class MusicAutoPlayer:
 
     def calculate_blocks(self):
         """3-2、计算方块坐标"""
-        if None in self.state['coordinate']: return
-        left, top = self.state['coordinate'][0]
-        right, bottom = self.state['coordinate'][1]
+        if None in self.state['coordinate']:
+            return
+        left, top, right, bottom = self.state['coordinate'][0], self.state['coordinate'][1]
         w, h = (right - left) / 4, (bottom - top) / 4
         for i in range(16):
             x = left + (i % 4) * w + w / 2
