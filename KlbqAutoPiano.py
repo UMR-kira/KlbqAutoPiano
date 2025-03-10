@@ -17,7 +17,7 @@ from pygame import mixer
 """
 终于正常实现鼠标移动了！！！（3.11 0:11）
 """
-the_title = "卡拉彼丘琴房助手 v1.5.2.1 (25.3.11)"
+the_title = "卡拉彼丘琴房助手 v1.5.2.2 (25.3.11)"
 
 
 class GlobalHotkey:
@@ -129,16 +129,16 @@ class SheetEditor:
         beat_frame.pack(side='left', padx=5)
         ttk.Label(beat_frame, text="当前节拍").pack(side='left')
         self.beat_entry = ttk.Entry(beat_frame, width=8)
-        self.beat_entry.insert(0, "0.25")
+        self.beat_entry.insert(0, "1.0")
         self.beat_entry.pack(side='left', padx=2)
         ttk.Button(beat_frame, text="半拍", width=5,
-                   command=lambda: self.adjust_beat(0.125)).pack(side='left')
+                   command=lambda: self.adjust_beat(0.5)).pack(side='left')
         ttk.Button(beat_frame, text="一拍", width=5,
-                   command=lambda: self.adjust_beat(0.25)).pack(side='left')
+                   command=lambda: self.adjust_beat(1.0)).pack(side='left')
         ttk.Button(beat_frame, text="空半拍", width=8,
-                   command=lambda: self.adjust_beat(-0.125)).pack(side='left')
+                   command=lambda: self.adjust_beat(-0.5)).pack(side='left')
         ttk.Button(beat_frame, text="空一拍", width=8,
-                   command=lambda: self.adjust_beat(-0.25)).pack(side='left')
+                   command=lambda: self.adjust_beat(-1.0)).pack(side='left')
 
         ttk.Checkbutton(top_control, text="窗口置顶",
                         command=lambda: self.edit_window.attributes('-topmost',
@@ -229,7 +229,7 @@ class SheetEditor:
         if self.edit_window and self.edit_window.winfo_exists():
             self.listbox.delete(0, tk.END)
             for note in self.app.sheet_data:
-                self.listbox.insert(tk.END, f"节拍: {note['beat']:.3f} | 方块: {note['block']}")
+                self.listbox.insert(tk.END, f"节拍: {note['beat']:.2f} | 方块: {note['block']}")
 
     def on_select(self, event):
         """处理列表选择事件"""
@@ -582,7 +582,7 @@ class MusicAutoPlayer:
             x = left + (i % 4) * w + w / 2
             y = top + (i // 4) * h + h / 2
 
-            # # 添加非线性校正（可根据实际游戏调整参数）感觉最好还是图像识别
+            # # 添加非线性校正（可根据实际游戏调整参数）
             # x = x + 0.01 * (x - self.center_position[0]) ** 2
             # y = y + 0.01 * (y - self.center_position[1]) ** 2
 
@@ -693,7 +693,7 @@ class MusicAutoPlayer:
             delay = 60 / bpm
             # 初始移动中心
             midx, midy = self.center_position[0], self.center_position[1]
-            print(midx, midy)
+            # print(midx, midy)
             for idx, note in enumerate(self.sheet_data):
                 if not self.state['playing']: break
                 # 处理暂停和窗口激活检测
@@ -707,10 +707,11 @@ class MusicAutoPlayer:
                     if not self.state['playing'] or self.state['paused']: break
                 # 界面更新
                 self.window.after(0, self.highlight_note, idx)
+                self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
                 # 非空节拍才演奏
+                stime = time.time()
                 if note['beat'] > 0:
                     try:
-                        self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
                         mouse_shift = float(self.mouse_move.get())  # 从界面获取鼠标抖动
                         sensitivity = float(self.sensitivity_entry.get())  # 从界面获取灵敏度
                         block = note['block'] - 1   # 取得索引
@@ -719,20 +720,27 @@ class MusicAutoPlayer:
                         # 计算目标节点与初始移动中心的距离相对鼠标偏移量
                         dx = int((target_x - midx - random.gauss(0, mouse_shift)) * sensitivity)
                         dy = int((target_y - midy - random.gauss(0, mouse_shift)) * sensitivity)
-                        print(dx, dy)
+                        # print(dx, dy)
                         # 移动鼠标点击
-                        move_time = random.uniform(target_time * 0.90, target_time * 0.95)
+                        move_time = random.uniform(target_time * 0.75, target_time * 0.85)
+                        print(move_time)
                         # 移动相对位置
                         pydirectinput.moveRel(dx, dy, relative=True, duration=move_time, tween=pyautogui.easeInOutQuad)
                         pydirectinput.click()
-                        # time.sleep(move_time)
+                        # 结束时间
+                        etime = time.time()
+                        wait_time = etime - stime
+                        print(wait_time)
+                        # 补全一拍等待时间，时间同步
                         midx, midy = target_x, target_y
+                        if wait_time < target_time:
+                            time.sleep(target_time-wait_time)
                     except Exception as e:
                         print(f"移动出错：{str(e)}")
                         self.update_status(f"移动出错：{str(e)}", 'red')
                 else:
                     # 空节拍延时
-                    time.sleep(random.uniform(target_time*0.95, target_time*1.05))
+                    time.sleep(target_time)
         except Exception as e:
             self.update_status(f"演奏出错：{str(e)}", 'red')
         finally:
@@ -767,7 +775,7 @@ class MusicAutoPlayer:
         # 重新生成显示
         if hasattr(self, 'sheet_data'):
             for col_idx, note in enumerate(self.sheet_data):
-                beat_lbl = ttk.Label(self.sheet_table, text=f"{note['beat']:.3f}", width=6)
+                beat_lbl = ttk.Label(self.sheet_table, text=f"{note['beat']:.2f}", width=6)
                 beat_lbl.grid(row=0, column=col_idx, padx=2, pady=2)
                 self.note_labels['beat'].append(beat_lbl)
                 block_lbl = ttk.Label(self.sheet_table, text=note['block'], width=6)
@@ -824,6 +832,7 @@ class MusicAutoPlayer:
 
 
 if __name__ == "__main__":
+    # 管理员模式会导致调试失败
     if ctypes.windll.shell32.IsUserAnAdmin() == 0:
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
         sys.exit()
