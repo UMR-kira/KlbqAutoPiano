@@ -1,10 +1,13 @@
+import ctypes
 import os
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json
 import threading
 import time
 import random
+import pydirectinput
 import pyautogui
 import win32gui
 import win32con
@@ -12,9 +15,9 @@ from pynput import keyboard, mouse
 import pygame
 from pygame import mixer
 """
-修复预览播放功能，暂缺游戏音频文件
+终于正常实现鼠标移动了！！！（3.11 0:11）
 """
-the_title = "卡拉彼丘琴房助手 v1.4.3 (25.3.7)"
+the_title = "卡拉彼丘琴房助手 v1.5.2.1 (25.3.11)"
 
 
 class GlobalHotkey:
@@ -102,7 +105,6 @@ class SheetEditor:
             messagebox.showinfo("错误", "音频文件数量错误")
             self.app.update_status("载入音频失败")
             return
-
 
     def create_editor(self):
         """创建窗口"""
@@ -379,6 +381,7 @@ class MusicAutoPlayer:
             'bpm': 60,  # 演奏BPM
             'mouse': 10  # 鼠标抖动（模拟人类鼠标抖动，还没有在程序中实现）
         }
+        self.center_position = (0, 0)  # 存储矩阵中心坐标 !需要初始值
         self.note_labels = {'beat': [], 'block': []}  # 新增初始化
         self.setup_listeners()
         self.check_window_active()
@@ -411,8 +414,8 @@ class MusicAutoPlayer:
             ttk.Label(cal_frame, text="未设置", foreground='darkgray'),
             ttk.Label(cal_frame, text="未设置", foreground='darkgray')
         ]
-        self.cal_labels[0].grid(row=0, column=3, padx=5)
-        self.cal_labels[1].grid(row=0, column=4, padx=5)
+        self.cal_labels[0].grid(row=0, column=2, padx=5)
+        self.cal_labels[1].grid(row=0, column=3, padx=5)
 
         # 第三行 坐标矩阵
         grid_frame = ttk.LabelFrame(self.window, text="校准坐标")
@@ -445,16 +448,22 @@ class MusicAutoPlayer:
         play_setting_frame.grid(row=4, column=0, padx=10, pady=5, sticky='nsew')
         # BPM设置
         ttk.Label(play_setting_frame, text="BPM速度").grid(row=0, column=0, sticky='nsew')
-        self.bpm_entry = ttk.Entry(play_setting_frame, width=6)
+        self.bpm_entry = ttk.Entry(play_setting_frame, width=4)
         self.bpm_entry.insert(0, "60")
         self.bpm_entry.grid(row=0, column=1, padx=5, sticky='nsew')
         ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=6).grid(row=0, column=2, sticky='nsew')
         # 抖动设置
         ttk.Label(play_setting_frame, text="鼠标抖动").grid(row=0, column=3, sticky='e')
-        self.mouse_move = ttk.Entry(play_setting_frame, width=6)
-        self.mouse_move.insert(0, "10")
+        self.mouse_move = ttk.Entry(play_setting_frame, width=4)
+        self.mouse_move.insert(0, "5")
         self.mouse_move.grid(row=0, column=4, padx=5)
         ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=6).grid(row=0, column=5, sticky='e')
+
+        # 在UI中添加以下控件
+        ttk.Label(play_setting_frame, text="灵敏度").grid(row=0, column=6)
+        self.sensitivity_entry = ttk.Entry(play_setting_frame, width=4)
+        self.sensitivity_entry.insert(0, "1.0")
+        self.sensitivity_entry.grid(row=0, column=7)
 
         # 第六行 乐谱控制
         sheet_frame = ttk.LabelFrame(self.window, text="乐谱管理")
@@ -504,6 +513,7 @@ class MusicAutoPlayer:
             self.toggle_pause()
             self.update_status("窗口未激活，自动暂停", 'orange')
         self.window.after(1000, self.check_window_active)
+        # pass
 
     def is_window_active(self):
         """5-2、检测游戏窗口是否激活"""
@@ -522,7 +532,6 @@ class MusicAutoPlayer:
 
     def capture_window(self):
         """2、捕捉游戏窗口"""
-
         def on_click(x, y, button, pressed):
             if pressed and button == mouse.Button.left:
                 hwnd = win32gui.WindowFromPoint((x, y))
@@ -533,7 +542,6 @@ class MusicAutoPlayer:
                     self.state.update(hwnd=root_hwnd, rect=rect)
                     self.update_status(f"已捕捉：{title}", 'green')
                     return False
-
         self.update_status("请点击游戏窗口任意位置...", 'blue')
         mouse.Listener(on_click=on_click).start()
 
@@ -553,18 +561,35 @@ class MusicAutoPlayer:
         self.update_status(f"请点击{'左上' if corner == 0 else '右下'}角...", 'blue')
         mouse.Listener(on_click=on_click).start()
 
+    def calibrate_center(self):
+        """3-2、获取矩阵中心坐标"""
+        left, top = self.state['coordinate'][0]
+        right, bottom = self.state['coordinate'][1]
+        self.center_position = (
+            (left + right) // 2,
+            (top + bottom) // 2
+        )
+
     def calculate_blocks(self):
-        """3-2、计算方块坐标"""
+        """3-3、计算方块坐标"""
         if None in self.state['coordinate']: return
         left, top = self.state['coordinate'][0]
         right, bottom = self.state['coordinate'][1]
         w, h = (right - left) / 4, (bottom - top) / 4
+
         for i in range(16):
+            # 原始坐标计算
             x = left + (i % 4) * w + w / 2
             y = top + (i // 4) * h + h / 2
+
+            # # 添加非线性校正（可根据实际游戏调整参数）感觉最好还是图像识别
+            # x = x + 0.01 * (x - self.center_position[0]) ** 2
+            # y = y + 0.01 * (y - self.center_position[1]) ** 2
+
             self.state['blocks'][i] = (x, y)
             self.grid_labels[i].config(text=f"({int(x)}, {int(y)})")
-        self.update_status("坐标已更新", 'green')
+        self.calibrate_center()
+        self.update_status(f"中心点坐标已更新:{self.center_position[0]},{self.center_position[1]}", 'green')
 
     def load_sheet(self):
         """4、加载乐谱"""
@@ -656,19 +681,19 @@ class MusicAutoPlayer:
     def play_notes(self):
         """6-1、演奏核心逻辑"""
         start_time = time.time()
-        # 键位映射：实际键位编号 → 原索引
+        # 修改键位映射：实际键位编号 → 原索引
         index_map = [
             12, 13, 14, 15,  # 坐标存储索引0-3 → 原索引12-15（对应13-16）
             8, 9, 10, 11,  # 坐标存储4-7 → 原索引8-11（对应9-12）
             4, 5, 6, 7,  # 坐标存储8-11 → 原索引4-7（对应5-8）
             0, 1, 2, 3  # 坐标存储12-15 → 原索引0-3（对应1-4）
         ]
-
         try:
             bpm = int(self.state['bpm'])
-            print(bpm)
             delay = 60 / bpm
-
+            # 初始移动中心
+            midx, midy = self.center_position[0], self.center_position[1]
+            print(midx, midy)
             for idx, note in enumerate(self.sheet_data):
                 if not self.state['playing']: break
                 # 处理暂停和窗口激活检测
@@ -676,28 +701,35 @@ class MusicAutoPlayer:
                     if not self.state['playing']: return
                     if not self.state['paused'] and self.is_window_active():
                         break
-
                 # 节拍同步  记录空节拍时间
                 target_time = abs(note['beat']) * delay
                 while time.time() - start_time < target_time:
                     if not self.state['playing'] or self.state['paused']: break
-
                 # 界面更新
                 self.window.after(0, self.highlight_note, idx)
                 # 非空节拍才演奏
                 if note['beat'] > 0:
-                    self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
-                    # 取得索引
-                    block = note['block']-1
-                    mouse_shift = self.state.get('mouse')
-                    # 修改索引映射逻辑
-                    original_index = index_map[block]
-                    x, y = self.state['blocks'][original_index]
-                    # 坐标移动模拟点击
-                    x += random.gauss(0, mouse_shift)
-                    y += random.gauss(0, mouse_shift)
-                    pyautogui.moveTo(x, y, duration=random.uniform(target_time*0.85, target_time*0.95))
-                    pyautogui.click()
+                    try:
+                        self.window.after(0, lambda: self.sheet_canvas.xview_moveto(idx / len(self.sheet_data)))
+                        mouse_shift = float(self.mouse_move.get())  # 从界面获取鼠标抖动
+                        sensitivity = float(self.sensitivity_entry.get())  # 从界面获取灵敏度
+                        block = note['block'] - 1   # 取得索引
+                        original_index = index_map[block]   # 修改索引映射逻辑
+                        target_x, target_y = self.state['blocks'][original_index]
+                        # 计算目标节点与初始移动中心的距离相对鼠标偏移量
+                        dx = int((target_x - midx - random.gauss(0, mouse_shift)) * sensitivity)
+                        dy = int((target_y - midy - random.gauss(0, mouse_shift)) * sensitivity)
+                        print(dx, dy)
+                        # 移动鼠标点击
+                        move_time = random.uniform(target_time * 0.90, target_time * 0.95)
+                        # 移动相对位置
+                        pydirectinput.moveRel(dx, dy, relative=True, duration=move_time, tween=pyautogui.easeInOutQuad)
+                        pydirectinput.click()
+                        # time.sleep(move_time)
+                        midx, midy = target_x, target_y
+                    except Exception as e:
+                        print(f"移动出错：{str(e)}")
+                        self.update_status(f"移动出错：{str(e)}", 'red')
                 else:
                     # 空节拍延时
                     time.sleep(random.uniform(target_time*0.95, target_time*1.05))
@@ -792,5 +824,8 @@ class MusicAutoPlayer:
 
 
 if __name__ == "__main__":
+    if ctypes.windll.shell32.IsUserAnAdmin() == 0:
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
+        sys.exit()
     app = MusicAutoPlayer()
     app.window.mainloop()
