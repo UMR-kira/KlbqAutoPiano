@@ -15,9 +15,9 @@ from pynput import keyboard, mouse
 import pygame
 from pygame import mixer
 """
-终于正常实现鼠标移动了！！！（3.11 0:11）
+增加了预览功能
 """
-the_title = "卡拉彼丘琴房助手 v1.5.2.2 (25.3.11)"
+the_title = "卡拉彼丘琴房助手 v1.5.3 (25.3.11)"
 
 
 class GlobalHotkey:
@@ -70,6 +70,10 @@ class SheetEditor:
         self.preview_thread = None    # 新增预览线程
         self.sound_blocks = {}  # 存储音阶与声音文件的映射
         self.load_files_status = False
+        # 新增编辑状态变量
+        self.editing = False         # 是否正在编辑
+        self.edit_entry = None       # 编辑用的输入框
+        self.edit_index = -1         # 当前编辑项的索引
 
         # 初始化音频系统
         pygame.init()
@@ -128,17 +132,21 @@ class SheetEditor:
         beat_frame = ttk.Frame(top_control)
         beat_frame.pack(side='left', padx=5)
         ttk.Label(beat_frame, text="当前节拍").pack(side='left')
-        self.beat_entry = ttk.Entry(beat_frame, width=8)
+        self.beat_entry = ttk.Entry(beat_frame, width=4)
         self.beat_entry.insert(0, "1.0")
         self.beat_entry.pack(side='left', padx=2)
         ttk.Button(beat_frame, text="半拍", width=5,
                    command=lambda: self.adjust_beat(0.5)).pack(side='left')
         ttk.Button(beat_frame, text="一拍", width=5,
                    command=lambda: self.adjust_beat(1.0)).pack(side='left')
-        ttk.Button(beat_frame, text="空半拍", width=8,
-                   command=lambda: self.adjust_beat(-0.5)).pack(side='left')
-        ttk.Button(beat_frame, text="空一拍", width=8,
-                   command=lambda: self.adjust_beat(-1.0)).pack(side='left')
+        ttk.Button(beat_frame, text="换行空拍", width=8,
+                   command=lambda: self.add_blank(-2.0)).pack(side='right')
+        ttk.Button(beat_frame, text="空一拍", width=6,
+                   command=lambda: self.add_blank(-1.0)).pack(side='right')
+        ttk.Button(beat_frame, text="空半拍", width=6,
+                   command=lambda: self.add_blank(-0.5)).pack(side='right')
+
+
 
         ttk.Checkbutton(top_control, text="窗口置顶",
                         command=lambda: self.edit_window.attributes('-topmost',
@@ -186,6 +194,9 @@ class SheetEditor:
         # 绑定选择事件
         self.listbox.bind('<<ListboxSelect>>', self.on_select)
 
+        # 在创建 listbox 后添加双击事件绑定
+        self.listbox.bind("<Double-Button-1>", self.start_edit)  # 新增双击绑定
+
         # 底部控制按钮
         control_frame = ttk.Frame(self.edit_window)
         control_frame.pack(fill='x', padx=5, pady=5)
@@ -202,6 +213,78 @@ class SheetEditor:
 
         self.refresh_list()
 
+    def start_edit(self, event):
+        """启动编辑模式"""
+        if self.editing:  # 防止重复编辑
+            return
+
+        # 获取点击位置索引
+        index = self.listbox.nearest(event.y)
+        if index < 0:
+            return
+
+        # 获取原数据
+        original = self.app.sheet_data[index]
+        text = f"{original['beat']:.2f} | {original['block']}"
+
+        # 计算输入框位置
+        x, y, _, h = self.listbox.bbox(index)
+        y += self.listbox.winfo_y()
+
+        # 创建输入框
+        self.edit_entry = ttk.Entry(self.listbox, width=20)
+        self.edit_entry.place(x=x, y=y, width=150, height=h)
+        self.edit_entry.insert(0, text)
+        self.edit_entry.focus()
+
+        # 绑定事件
+        self.edit_entry.bind("<Return>", lambda e: self.finish_edit(index))
+        self.edit_entry.bind("<FocusOut>", lambda e: self.finish_edit(index))
+        self.edit_entry.bind("<Escape>", lambda e: self.cancel_edit())
+
+        self.editing = True
+        self.edit_index = index
+
+    def finish_edit(self, index):
+        """完成编辑"""
+        if not self.editing:
+            return
+
+        try:
+            # 解析输入内容
+            text = self.edit_entry.get()
+            beat, block = text.split("|")
+            beat = float(beat.strip())
+            block = int(block.strip())
+
+            # 数据校验
+            if not (0 <= block <= 16):
+                raise ValueError("方块编号必须为0-16")
+
+            # 更新数据
+            self.app.sheet_data[index] = {
+                'beat': -abs(beat) if block == 0 else abs(beat),  # 自动处理正负节拍
+                'block': block
+            }
+
+            # 刷新显示
+            self.refresh_list()
+            self.app.refresh_sheet_display()
+
+        except Exception as e:
+            messagebox.showerror("输入错误", f"无效格式: {str(e)}")
+
+        self.cancel_edit()
+
+    def cancel_edit(self):
+        """取消编辑"""
+        if self.edit_entry:
+            self.edit_entry.destroy()
+            self.edit_entry = None
+        self.editing = False
+        self.edit_index = -1
+
+
     def add_by_button(self, block):
         """通过按键插入音节"""
         try:
@@ -210,7 +293,8 @@ class SheetEditor:
             if beat < 0:
                 block = 0
             self.app.sheet_data.append({'beat': beat, 'block': block})
-            self.app.refresh_sheet_display()
+            self.refresh_list()
+            self.listbox.see(tk.END)  # 确保新条目可见
         except ValueError:
             messagebox.showerror("错误", "未知错误，获取音节失败")
 
@@ -224,12 +308,44 @@ class SheetEditor:
             self.beat_entry.delete(0, tk.END)
             self.beat_entry.insert(0, "0")
 
+    def add_blank(self, delta):
+        """增加空白节拍值"""
+        try:
+            self.beat_entry.delete(0, tk.END)
+            self.beat_entry.insert(0, delta)
+            self.add_by_button(0)
+            self.listbox.yview_moveto(self.selected_index / self.app.sheet_data.__len__())
+        except ValueError:
+            self.beat_entry.delete(0, tk.END)
+            self.beat_entry.insert(0, "")
+
     def refresh_list(self):
-        """刷新编辑器乐谱列表"""
+        """刷新编辑器乐谱列表（保持滚动位置）"""
         if self.edit_window and self.edit_window.winfo_exists():
+            # 保存当前滚动位置和选中状态
+            scroll_pos = self.listbox.yview()
+
+            selected = self.listbox.curselection()
+
+            # 刷新列表内容
             self.listbox.delete(0, tk.END)
             for note in self.app.sheet_data:
                 self.listbox.insert(tk.END, f"节拍: {note['beat']:.2f} | 方块: {note['block']}")
+
+            # 恢复滚动位置
+            self.listbox.yview_moveto(scroll_pos[0])
+
+            # 恢复选中状态（如果存在）
+            if selected:
+                try:
+                    self.listbox.selection_set(selected[0])
+                except tk.TclError:
+                    pass
+
+            # 如果之前正在编辑，重新定位
+            if self.editing and self.edit_index >= 0:
+                self.listbox.selection_set(self.edit_index)
+                self.listbox.see(self.edit_index)
 
     def on_select(self, event):
         """处理列表选择事件"""
@@ -250,9 +366,12 @@ class SheetEditor:
                     new_note = {'beat': beat, 'block': block}
                     insert_index = self.selected_index
                     self.app.sheet_data.insert(insert_index, new_note)
-                    self.selected_index = -1
                     self.refresh_list()
-                    self.app.refresh_sheet_display()
+                    # 插入位置保持选中
+                    self.listbox.selection_clear(0, tk.END)
+                    self.listbox.selection_set(insert_index)
+                    self.listbox.see(insert_index)
+
                 else:
                     messagebox.showerror("错误", "不存在的音节")
             else:
@@ -266,8 +385,12 @@ class SheetEditor:
             if len(self.app.sheet_data) > self.selected_index:
                 del self.app.sheet_data[self.selected_index]
                 self.refresh_list()
-                self.app.refresh_sheet_display()
-                self.selected_index = -1
+
+                # 删除后自动选中下一个条目
+                new_index = min(self.selected_index, len(self.app.sheet_data) - 1)
+                if new_index >= 0:
+                    self.listbox.selection_set(new_index)
+                    self.listbox.see(new_index)
 
     def play_preview(self):
         """新增预览播放方法"""
@@ -289,20 +412,28 @@ class SheetEditor:
                 messagebox.showerror("错误", "无效的BPM值")
                 return
 
+            index = self.selected_index
             self.preview_playing = True
             self.preview_thread = threading.Thread(
                 target=self.run_preview,
-                args=(bpm, notes),
+                args=(bpm, notes, index),
                 daemon=True
             )
             self.preview_thread.start()
 
-    def run_preview(self, bpm, notes):
+    def run_preview(self, bpm, notes, index):
         """新增预览播放核心逻辑"""
         base_delay = 60 / bpm  # 每拍基础时间
         channel = mixer.Channel(0)  # 使用独立音频通道
         try:
+            flag = 0
+            if index == -1:
+                index = 0
             for idx, note in enumerate(notes):
+                # 跳过索引前的音节
+                if idx != index and flag == 0:
+                    continue
+                flag = 1
                 if not self.preview_playing:
                     break
 
@@ -340,6 +471,10 @@ class SheetEditor:
         self.preview_playing = False
         if self.preview_thread and self.preview_thread.is_alive():
             self.preview_thread.join(0.5)
+        index = self.selected_index
+        self.listbox.selection_clear(0, tk.END)
+        self.listbox.selection_set(index)
+        self.listbox.see(index)
 
     def new_sheet(self):
         """新建乐谱"""
@@ -386,7 +521,8 @@ class MusicAutoPlayer:
         self.setup_listeners()
         self.check_window_active()
 
-    def create_window(self):
+    @staticmethod
+    def create_window():
         """1、创建主窗口"""
         window = tk.Tk()
         window.title(the_title)
@@ -509,11 +645,11 @@ class MusicAutoPlayer:
 
     def check_window_active(self):
         """5-1、定时检测窗口激活状态"""
-        if self.state['playing'] and not self.is_window_active():
-            self.toggle_pause()
-            self.update_status("窗口未激活，自动暂停", 'orange')
-        self.window.after(1000, self.check_window_active)
-        # pass
+        # if self.state['playing'] and not self.is_window_active():
+        #     self.toggle_pause()
+        #     self.update_status("窗口未激活，自动暂停", 'orange')
+        # self.window.after(1000, self.check_window_active)
+        pass
 
     def is_window_active(self):
         """5-2、检测游戏窗口是否激活"""
@@ -616,6 +752,8 @@ class MusicAutoPlayer:
                 self.bpm_entry.delete(0, tk.END)
                 self.bpm_entry.insert(0, str(data['bpm']))
                 self.refresh_sheet_display()  # 调用主界面刷新方法
+                # 单独调用回到开头
+                self.sheet_canvas.xview_moveto(0)
                 self.sheet_editor.refresh_list()  # 主动刷新编辑器
 
             # 读取提示
@@ -680,7 +818,6 @@ class MusicAutoPlayer:
 
     def play_notes(self):
         """6-1、演奏核心逻辑"""
-        start_time = time.time()
         # 修改键位映射：实际键位编号 → 原索引
         index_map = [
             12, 13, 14, 15,  # 坐标存储索引0-3 → 原索引12-15（对应13-16）
@@ -688,6 +825,7 @@ class MusicAutoPlayer:
             4, 5, 6, 7,  # 坐标存储8-11 → 原索引4-7（对应5-8）
             0, 1, 2, 3  # 坐标存储12-15 → 原索引0-3（对应1-4）
         ]
+        start_time = time.time()
         try:
             bpm = int(self.state['bpm'])
             delay = 60 / bpm
@@ -697,10 +835,10 @@ class MusicAutoPlayer:
             for idx, note in enumerate(self.sheet_data):
                 if not self.state['playing']: break
                 # 处理暂停和窗口激活检测
-                while True:
-                    if not self.state['playing']: return
-                    if not self.state['paused'] and self.is_window_active():
-                        break
+                # while True:
+                #     if not self.state['playing']: return
+                #     if not self.state['paused'] and self.is_window_active():
+                #         break
                 # 节拍同步  记录空节拍时间
                 target_time = abs(note['beat']) * delay
                 while time.time() - start_time < target_time:
@@ -766,6 +904,7 @@ class MusicAutoPlayer:
 
     def refresh_sheet_display(self):
         """刷新主界面乐谱显示"""
+        # 刷新每次都是删除再重新生成，存在问题！！！
         for col in self.note_labels.values():
             for widget in col:
                 widget.destroy()
@@ -783,7 +922,7 @@ class MusicAutoPlayer:
                 self.note_labels['block'].append(block_lbl)
 
         # 主界面乐谱移动到开头
-        self.sheet_canvas.xview_moveto(0)
+        # self.sheet_canvas.xview_moveto(0)
 
         # 判断编辑器窗口是否存在后再刷新
         if self.sheet_editor.edit_window:
