@@ -7,6 +7,9 @@ import json
 import threading
 import time
 import random
+
+import cv2
+import numpy as np
 import pydirectinput
 import pyautogui
 import win32gui
@@ -15,9 +18,9 @@ from pynput import keyboard, mouse
 import pygame
 from pygame import mixer
 """
-增加了预览功能
+尝试采用自动识别琴键
 """
-the_title = "卡拉彼丘琴房助手 v1.5.3 (25.3.11)"
+the_title = "卡拉彼丘琴房助手 v1.5.3cv (25.3.14)"
 
 
 class GlobalHotkey:
@@ -64,16 +67,16 @@ class SheetEditor:
         self.listbox = None
         self.current_beat = 0.0
         self.key_buttons = []
-        self.selected_index = -1  # 新增选中音符索引
+        self.selected_index = -1
 
-        self.preview_playing = False  # 新增预览播放状态
-        self.preview_thread = None    # 新增预览线程
-        self.sound_blocks = {}  # 存储音阶与声音文件的映射
+        self.preview_playing = False
+        self.preview_thread = None
+        self.sound_blocks = {}
         self.load_files_status = False
         # 新增编辑状态变量
-        self.editing = False         # 是否正在编辑
-        self.edit_entry = None       # 编辑用的输入框
-        self.edit_index = -1         # 当前编辑项的索引
+        self.editing = False
+        self.edit_entry = None
+        self.edit_index = -1
 
         # 初始化音频系统
         pygame.init()
@@ -93,7 +96,6 @@ class SheetEditor:
         for file in sound_files:
             if file.lower().endswith(('.wav', '.mp3', '.ogg')):
                 try:
-                    # 从文件名提取音阶编号（例如："1.wav" -> 1）
                     block_num = int(os.path.splitext(file)[0].strip('.'))
                     path = os.path.join(sound_dir, file)
                     self.sound_blocks[block_num] = mixer.Sound(path)
@@ -101,7 +103,6 @@ class SheetEditor:
                     messagebox.showinfo("错误", "读取音频失败")
                     self.app.update_status("载入音频失败")
                     return
-        # len方法要带()调用
         if self.sound_blocks.__len__() == 16:
             self.load_files_status = True
             self.app.update_status("载入音频成功")
@@ -118,7 +119,7 @@ class SheetEditor:
 
         # 编辑器页面
         self.edit_window = tk.Toplevel(self.app.window)
-        # 新增窗口关闭协议
+        # 窗口关闭协议
         self.edit_window.protocol("WM_DELETE_WINDOW", self.on_editor_close)
 
         self.edit_window.title("乐谱编辑器")
@@ -145,8 +146,6 @@ class SheetEditor:
                    command=lambda: self.add_blank(-1.0)).pack(side='right')
         ttk.Button(beat_frame, text="空半拍", width=6,
                    command=lambda: self.add_blank(-0.5)).pack(side='right')
-
-
 
         ttk.Checkbutton(top_control, text="窗口置顶",
                         command=lambda: self.edit_window.attributes('-topmost',
@@ -217,12 +216,9 @@ class SheetEditor:
         """启动编辑模式"""
         if self.editing:  # 防止重复编辑
             return
-
         # 获取点击位置索引
         index = self.listbox.nearest(event.y)
-        if index < 0:
-            return
-
+        if index < 0: return
         # 获取原数据
         original = self.app.sheet_data[index]
         text = f"{original['beat']:.2f} | {original['block']}"
@@ -247,30 +243,24 @@ class SheetEditor:
 
     def finish_edit(self, index):
         """完成编辑"""
-        if not self.editing:
-            return
-
+        if not self.editing: return
         try:
             # 解析输入内容
             text = self.edit_entry.get()
             beat, block = text.split("|")
             beat = float(beat.strip())
             block = int(block.strip())
-
             # 数据校验
             if not (0 <= block <= 16):
                 raise ValueError("方块编号必须为0-16")
-
             # 更新数据
             self.app.sheet_data[index] = {
                 'beat': -abs(beat) if block == 0 else abs(beat),  # 自动处理正负节拍
                 'block': block
             }
-
             # 刷新显示
             self.refresh_list()
             self.app.refresh_sheet_display()
-
         except Exception as e:
             messagebox.showerror("输入错误", f"无效格式: {str(e)}")
 
@@ -283,7 +273,6 @@ class SheetEditor:
             self.edit_entry = None
         self.editing = False
         self.edit_index = -1
-
 
     def add_by_button(self, block):
         """通过按键插入音节"""
@@ -303,7 +292,6 @@ class SheetEditor:
         try:
             self.beat_entry.delete(0, tk.END)
             self.beat_entry.insert(0, delta)
-
         except ValueError:
             self.beat_entry.delete(0, tk.END)
             self.beat_entry.insert(0, "0")
@@ -324,24 +312,19 @@ class SheetEditor:
         if self.edit_window and self.edit_window.winfo_exists():
             # 保存当前滚动位置和选中状态
             scroll_pos = self.listbox.yview()
-
             selected = self.listbox.curselection()
-
             # 刷新列表内容
             self.listbox.delete(0, tk.END)
             for note in self.app.sheet_data:
                 self.listbox.insert(tk.END, f"节拍: {note['beat']:.2f} | 方块: {note['block']}")
-
             # 恢复滚动位置
             self.listbox.yview_moveto(scroll_pos[0])
-
             # 恢复选中状态（如果存在）
             if selected:
                 try:
                     self.listbox.selection_set(selected[0])
                 except tk.TclError:
                     pass
-
             # 如果之前正在编辑，重新定位
             if self.editing and self.edit_index >= 0:
                 self.listbox.selection_set(self.edit_index)
@@ -371,7 +354,6 @@ class SheetEditor:
                     self.listbox.selection_clear(0, tk.END)
                     self.listbox.selection_set(insert_index)
                     self.listbox.see(insert_index)
-
                 else:
                     messagebox.showerror("错误", "不存在的音节")
             else:
@@ -385,7 +367,6 @@ class SheetEditor:
             if len(self.app.sheet_data) > self.selected_index:
                 del self.app.sheet_data[self.selected_index]
                 self.refresh_list()
-
                 # 删除后自动选中下一个条目
                 new_index = min(self.selected_index, len(self.app.sheet_data) - 1)
                 if new_index >= 0:
@@ -393,9 +374,8 @@ class SheetEditor:
                     self.listbox.see(new_index)
 
     def play_preview(self):
-        """新增预览播放方法"""
-        # 防止重复点击播放
-        if self.preview_playing:
+        """预览播放方法"""
+        if self.preview_playing:    # 防止重复点击播放
             return
         if not self.load_files_status:
             self.load_sound_files()
@@ -411,7 +391,6 @@ class SheetEditor:
             except ValueError:
                 messagebox.showerror("错误", "无效的BPM值")
                 return
-
             index = self.selected_index
             self.preview_playing = True
             self.preview_thread = threading.Thread(
@@ -509,21 +488,20 @@ class MusicAutoPlayer:
             'paused': False,
             'hwnd': None,  # 匹配窗口的句柄
             'rect': None,  # 匹配窗口尺寸大小
-            'coordinate': [None, None],  # 存储窗口坐标
+            'coordinate': (0, 0, 0, 0),  # 存储匹配区域坐标
             'blocks': [(0, 0)] * 16,  # 16个区块的状态
             'current_note': -1,  # 表示当前正在处理或播放的音符
             'hotkeys': None,  # 存储热键配置信息
             'bpm': 60,  # 演奏BPM
             'mouse': 10  # 鼠标抖动（模拟人类鼠标抖动，还没有在程序中实现）
         }
-        self.center_position = (0, 0)  # 存储矩阵中心坐标 !需要初始值
         self.note_labels = {'beat': [], 'block': []}  # 新增初始化
         self.setup_listeners()
         self.check_window_active()
 
     @staticmethod
     def create_window():
-        """1、创建主窗口"""
+        """创建主窗口"""
         window = tk.Tk()
         window.title(the_title)
         window.geometry("700x750")
@@ -531,7 +509,7 @@ class MusicAutoPlayer:
         return window
 
     def init_ui(self):
-        """2、初始化界面组件"""
+        """初始化界面组件"""
         # 总控制面板
         control_frame = ttk.LabelFrame(self.window, text="控制面板")
         control_frame.grid(row=0, column=0, padx=10, pady=5, sticky='nsew')
@@ -544,14 +522,9 @@ class MusicAutoPlayer:
         # 第二行 校准面板
         cal_frame = ttk.LabelFrame(self.window, text="坐标校准")
         cal_frame.grid(row=1, column=0, padx=10, pady=5, sticky='nsew')
-        ttk.Button(cal_frame, text="定位左上", command=lambda: self.get_coordinate(0)).grid(row=0, column=0)
-        ttk.Button(cal_frame, text="定位右下", command=lambda: self.get_coordinate(1)).grid(row=0, column=1)
-        self.cal_labels = [
-            ttk.Label(cal_frame, text="未设置", foreground='darkgray'),
-            ttk.Label(cal_frame, text="未设置", foreground='darkgray')
-        ]
-        self.cal_labels[0].grid(row=0, column=2, padx=5)
-        self.cal_labels[1].grid(row=0, column=3, padx=5)
+        ttk.Button(cal_frame, text="开始定位按键", command=self.locate_coordinate).grid(row=0, column=0)
+        self.cal_label = ttk.Label(cal_frame, text="未定位", foreground='darkgray')
+        self.cal_label.grid(row=0, column=2, padx=10, sticky='nsew')
 
         # 第三行 坐标矩阵
         grid_frame = ttk.LabelFrame(self.window, text="校准坐标")
@@ -560,7 +533,7 @@ class MusicAutoPlayer:
         self.grid_labels = []
         for i in range(16):
             lbl = ttk.Label(grid_frame, text="(0,0)", width=10, relief='ridge')
-            lbl.grid(row=i // 4, column=i % 4, padx=2, pady=2)
+            lbl.grid(row=i // 4, column=i % 4, padx=2, pady=2, sticky='nsew')
             self.grid_labels.append(lbl)
 
         # 第四行 播放控制
@@ -591,14 +564,14 @@ class MusicAutoPlayer:
         # 抖动设置
         ttk.Label(play_setting_frame, text="鼠标抖动").grid(row=0, column=3, sticky='e')
         self.mouse_move = ttk.Entry(play_setting_frame, width=4)
-        self.mouse_move.insert(0, "5")
+        self.mouse_move.insert(0, "3")
         self.mouse_move.grid(row=0, column=4, padx=5)
         ttk.Button(play_setting_frame, text="修改", command=self.update_bpm, width=6).grid(row=0, column=5, sticky='e')
 
         # 在UI中添加以下控件
         ttk.Label(play_setting_frame, text="灵敏度").grid(row=0, column=6)
         self.sensitivity_entry = ttk.Entry(play_setting_frame, width=4)
-        self.sensitivity_entry.insert(0, "1.0")
+        self.sensitivity_entry.insert(0, "1.65")
         self.sensitivity_entry.grid(row=0, column=7)
 
         # 第六行 乐谱控制
@@ -635,11 +608,11 @@ class MusicAutoPlayer:
             xscrollcommand=scroll_x.set))
 
     def update_status(self, message, color='gray'):
-        """3、更新状态栏"""
+        """更新状态栏"""
         self.status_label.config(text=message, foreground=color)
 
     def setup_listeners(self):
-        """4、设置事件监听"""
+        """设置事件监听"""
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
         self.state['hotkeys'] = GlobalHotkey(self.start_playing, self.toggle_pause, self.stop_playing)
 
@@ -662,12 +635,12 @@ class MusicAutoPlayer:
     """-----------------以下为实际功能-----------------"""
 
     def toggle_topmost(self):
-        """1、切换置顶状态"""
+        """切换置顶状态"""
         current = self.window.attributes('-topmost')
         self.window.attributes('-topmost', not current)
 
     def capture_window(self):
-        """2、捕捉游戏窗口"""
+        """捕捉游戏窗口"""
         def on_click(x, y, button, pressed):
             if pressed and button == mouse.Button.left:
                 hwnd = win32gui.WindowFromPoint((x, y))
@@ -681,54 +654,83 @@ class MusicAutoPlayer:
         self.update_status("请点击游戏窗口任意位置...", 'blue')
         mouse.Listener(on_click=on_click).start()
 
-    def get_coordinate(self, corner):
-        """3-1、开始坐标校准"""
+    def locate_coordinate(self):
+        """开始坐标校准"""
         if not self.state['hwnd']:
             self.update_status("请先捕捉窗口", 'red')
             return
+        flag = 0
+        try:
+            location_button = pyautogui.locateOnScreen('key.png', confidence=0.8)
+            left, top, width, height = location_button
+            button_region = (int(left), int(top), int(width), int(height))
+            self.state['coordinate'] = button_region
+            self.cal_label.config(text=f"匹配区域({left}, {top}),({width}, {height})", foreground='green')
+            flag = 1
+        except Exception as e:
+            self.update_status(f"区域定位失败:{str(e)}", 'red')
 
-        def on_click(x, y, button, pressed):
-            if pressed and button == mouse.Button.left:
-                self.state['coordinate'][corner] = (x, y)
-                self.cal_labels[corner].config(text=f"({x}, {y})", foreground='green')
-                self.calculate_blocks()
-                return False
+        if flag:
+            try:
+                # 找到区域截图
+                im = pyautogui.screenshot(region=button_region)
+                # 将 PIL 图像转换为 NumPy 数组
+                image = np.array(im)
+                gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+                if gray_image is None:
+                    messagebox.showinfo("错误", "无法加载图像")
+                    return
+                # 固定阈值分割
+                _, binary_image = cv2.threshold(gray_image, thresh=80, maxval=255, type=cv2.THRESH_BINARY)
 
-        self.update_status(f"请点击{'左上' if corner == 0 else '右下'}角...", 'blue')
-        mouse.Listener(on_click=on_click).start()
+                # 创建结构元素
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))  # 矩形结构元素
+                # 开运算
+                opened_image = cv2.morphologyEx(binary_image, cv2.MORPH_OPEN, kernel, iterations=1)
 
-    def calibrate_center(self):
-        """3-2、获取矩阵中心坐标"""
-        left, top = self.state['coordinate'][0]
-        right, bottom = self.state['coordinate'][1]
-        self.center_position = (
-            (left + right) // 2,
-            (top + bottom) // 2
-        )
+                # 使用findContours获取轮廓
+                contours, _ = cv2.findContours(opened_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                # 完成过滤和质心计算
+                centers = []
+                for cnt in contours:
+                    M = cv2.moments(cnt)
+                    area = M['m00']     # 轮廓的面积
+                    if area >= 500:     # 面积过滤
+                        cx = int(M['m10'] / area)   # 轮廓对 x 轴的矩
+                        cy = int(M['m01'] / area)   # 轮廓对 y 轴的矩
+                        centers.append((cx, cy))
+                if len(centers) != 16:
+                    messagebox.showinfo("错误", f"检测到 {len(centers)} 个有效轮廓，应为16")
+                    return
 
-    def calculate_blocks(self):
-        """3-3、计算方块坐标"""
-        if None in self.state['coordinate']: return
-        left, top = self.state['coordinate'][0]
-        right, bottom = self.state['coordinate'][1]
-        w, h = (right - left) / 4, (bottom - top) / 4
-
-        for i in range(16):
-            # 原始坐标计算
-            x = left + (i % 4) * w + w / 2
-            y = top + (i // 4) * h + h / 2
-
-            # # 添加非线性校正（可根据实际游戏调整参数）
-            # x = x + 0.01 * (x - self.center_position[0]) ** 2
-            # y = y + 0.01 * (y - self.center_position[1]) ** 2
-
-            self.state['blocks'][i] = (x, y)
-            self.grid_labels[i].config(text=f"({int(x)}, {int(y)})")
-        self.calibrate_center()
-        self.update_status(f"中心点坐标已更新:{self.center_position[0]},{self.center_position[1]}", 'green')
+                # 按Y坐标排序
+                sorted_y = sorted(centers, key=lambda c: c[1])
+                # 4个一组依次排序顺序赋值
+                count = 3
+                center_x = []
+                for idx, (x, y) in enumerate(sorted_y):
+                    if count:
+                        center_x.append((x, y))
+                        count -= 1
+                        continue
+                    center_x.append((x, y))
+                    sorted_x = sorted(center_x, key=lambda c: c[0])
+                    for i in range(4):
+                        x, y = sorted_x[i]
+                        absolute_x = int(left) + int(x)
+                        absolute_y = int(top) + int(y)
+                        index = idx-(3-i)
+                        self.state['blocks'][index] = (absolute_x, absolute_y)
+                        self.grid_labels[index].config(text=f"({absolute_x},{absolute_y})")
+                    count = 3
+                    center_x = []
+                self.update_status(f"坐标已更新", 'green')
+            except Exception as e:
+                print(e)
+                self.update_status(f"按键定位失败:{str(e)}", 'red')
 
     def load_sheet(self):
-        """4、加载乐谱"""
+        """加载乐谱"""
         path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
         if not path: return
         try:
@@ -762,7 +764,7 @@ class MusicAutoPlayer:
             self.update_status(f"加载失败: {str(e)}", 'red')
 
     def start_playing(self):
-        """4-1、开始演奏"""
+        """开始演奏"""
         if not hasattr(self, 'sheet_data'):
             self.update_status("请先加载乐谱", 'red')
             return
@@ -777,7 +779,7 @@ class MusicAutoPlayer:
         threading.Thread(target=self.play_notes, daemon=True).start()
 
     def toggle_pause(self):
-        """4-2、切换暂停状态"""
+        """切换暂停状态"""
         if not self.state['playing']: return
         self.state['paused'] = not self.state['paused']
         status = "已暂停" if self.state['paused'] else "继续演奏"
@@ -790,7 +792,7 @@ class MusicAutoPlayer:
             self.pause_button.config(text="⏸ 暂停 (F11)")  # 继续时，按钮文本改为“暂停”
 
     def stop_playing(self):
-        """4-3、停止演奏"""
+        """停止演奏"""
         self.state['playing'] = False
         self.state['paused'] = False
         self.highlight_note(-1)
@@ -798,7 +800,7 @@ class MusicAutoPlayer:
         self.update_status("演奏已停止", 'gray')
 
     def update_bpm(self):
-        """5-1、更新BPM"""
+        """更新BPM"""
         try:
             bpm = int(self.bpm_entry.get())
             self.state['bpm'] = bpm
@@ -807,17 +809,16 @@ class MusicAutoPlayer:
             self.update_status("BPM必须为整数", 'red')
 
     def update_mouse(self):
-        """5-2、更新鼠标抖动"""
+        """更新鼠标抖动"""
         try:
             mouse_move = int(self.mouse_move.get())
             self.state['mouse'] = mouse_move
             self.update_status(f"鼠标抖动已修改{mouse_move}", 'green')
-
         except ValueError:
             self.update_status("抖动必须为整数", 'red')
 
     def play_notes(self):
-        """6-1、演奏核心逻辑"""
+        """演奏核心逻辑"""
         # 修改键位映射：实际键位编号 → 原索引
         index_map = [
             12, 13, 14, 15,  # 坐标存储索引0-3 → 原索引12-15（对应13-16）
@@ -830,15 +831,16 @@ class MusicAutoPlayer:
             bpm = int(self.state['bpm'])
             delay = 60 / bpm
             # 初始移动中心
-            midx, midy = self.center_position[0], self.center_position[1]
-            # print(midx, midy)
+            midx, midy = pyautogui.position()
             for idx, note in enumerate(self.sheet_data):
                 if not self.state['playing']: break
                 # 处理暂停和窗口激活检测
-                # while True:
-                #     if not self.state['playing']: return
-                #     if not self.state['paused'] and self.is_window_active():
-                #         break
+                while True:
+                    if not self.state['playing']:
+                        return
+                    if not self.state['paused'] and self.is_window_active():
+                        break
+                self.update_status(f"开始演奏", 'red')
                 # 节拍同步  记录空节拍时间
                 target_time = abs(note['beat']) * delay
                 while time.time() - start_time < target_time:
@@ -885,16 +887,14 @@ class MusicAutoPlayer:
             self.stop_playing()
 
     def highlight_note(self, idx):
-        """6-2、高亮当前音符"""
-        # 清除旧高亮
-        if self.state['current_note'] >= 0:
+        """高亮当前音符"""
+        if self.state['current_note'] >= 0:     # 清除旧高亮
             for lbl in self.note_labels.values():
                 try:
                     lbl[self.state['current_note']].config(background='')
                 except:
                     pass
-        # 设置新高亮
-        if idx >= 0:
+        if idx >= 0:    # 设置新高亮
             for lbl in self.note_labels.values():
                 try:
                     lbl[idx].config(background='#FFF3CD')
@@ -904,7 +904,6 @@ class MusicAutoPlayer:
 
     def refresh_sheet_display(self):
         """刷新主界面乐谱显示"""
-        # 刷新每次都是删除再重新生成，存在问题！！！
         for col in self.note_labels.values():
             for widget in col:
                 widget.destroy()
@@ -920,9 +919,6 @@ class MusicAutoPlayer:
                 block_lbl = ttk.Label(self.sheet_table, text=note['block'], width=6)
                 block_lbl.grid(row=1, column=col_idx, padx=2, pady=2)
                 self.note_labels['block'].append(block_lbl)
-
-        # 主界面乐谱移动到开头
-        # self.sheet_canvas.xview_moveto(0)
 
         # 判断编辑器窗口是否存在后再刷新
         if self.sheet_editor.edit_window:
@@ -971,7 +967,7 @@ class MusicAutoPlayer:
 
 
 if __name__ == "__main__":
-    # 管理员模式会导致调试失败
+    # 必须用管理员模式才能捕捉游戏窗口
     if ctypes.windll.shell32.IsUserAnAdmin() == 0:
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
         sys.exit()
